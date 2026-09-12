@@ -1,0 +1,28 @@
+[project]
+name = "ai-cif"
+version = "0.1.0"
+description = "AI for Pokémon Showdown"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "showdown-sdk",
+]
+
+[tool.uv.sources]
+showdown-sdk = { git = "https://github.com/AlexAuragan/Showdown-SDK.git" }
+
+[dependency-groups]
+dev = [
+    "basedpyright>=1.40.1",
+    "ruff>=0.16.7",
+    "tqdm>=4.70.1",
+]
+
+[tool.ruff]
+line-length = 80
+
+[tool.ruff.format]
+skip-magic-trailing-comma = true
+
+[tool.ruff.lint.isort]
+split-on-trailing-comma = false
