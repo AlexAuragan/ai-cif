@@ -28,16 +28,10 @@ class NeuralCombatHandler(BaseCombatHandler):
         self.model.eval()
 
     @override
-    def select_top_actions(
-        self,
-        battle_state: BattleState,
-    ) -> list[Action]:
+    def select_top_actions(self, battle_state: BattleState) -> list[Action]:
         features = battle_to_features(battle_state)
 
-        tensors = self.tensorizer.tensorize(
-            features,
-            device=self.device,
-        )
+        tensors = self.tensorizer.tensorize(features, device=self.device)
         batch = tensors.batched()
 
         with torch.inference_mode():
@@ -56,16 +50,12 @@ class NeuralCombatHandler(BaseCombatHandler):
 
         scores = logits[0, legal_indices]
 
-        ranking = torch.argsort(
-            scores,
-            descending=True,
-        )
+        ranking = torch.argsort(scores, descending=True)
 
         ranked_indices = legal_indices[ranking]
 
         return [
-            self._decode_action(int(index.item()))
-            for index in ranked_indices
+            self._decode_action(int(index.item())) for index in ranked_indices
         ]
 
     @staticmethod

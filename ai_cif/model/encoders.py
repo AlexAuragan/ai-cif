@@ -5,42 +5,26 @@ from ai_cif.model.config import ModelConfig
 
 
 class PokemonEncoder(nn.Module):
-    def __init__(
-        self,
-        config: ModelConfig,
-        numeric_feature_count: int,
-    ) -> None:
+    def __init__(self, config: ModelConfig, numeric_feature_count: int) -> None:
         super().__init__()
 
         self.species_embedding = nn.Embedding(
-            config.species_count,
-            config.species_embedding_dim,
-            padding_idx=0,
+            config.species_count, config.species_embedding_dim, padding_idx=0
         )
         self.form_embedding = nn.Embedding(
-            config.form_count,
-            config.form_embedding_dim,
-            padding_idx=0,
+            config.form_count, config.form_embedding_dim, padding_idx=0
         )
         self.move_embedding = nn.Embedding(
-            config.move_count,
-            config.move_embedding_dim,
-            padding_idx=0,
+            config.move_count, config.move_embedding_dim, padding_idx=0
         )
         self.item_embedding = nn.Embedding(
-            config.item_count,
-            config.item_embedding_dim,
-            padding_idx=0,
+            config.item_count, config.item_embedding_dim, padding_idx=0
         )
         self.ability_embedding = nn.Embedding(
-            config.ability_count,
-            config.ability_embedding_dim,
-            padding_idx=0,
+            config.ability_count, config.ability_embedding_dim, padding_idx=0
         )
         self.status_embedding = nn.Embedding(
-            config.status_count,
-            config.status_embedding_dim,
-            padding_idx=0,
+            config.status_count, config.status_embedding_dim, padding_idx=0
         )
 
         self.side_embedding = nn.Embedding(2, 4)
@@ -59,10 +43,7 @@ class PokemonEncoder(nn.Module):
         self.network = nn.Sequential(
             nn.Linear(input_dim, config.pokemon_hidden_dim),
             nn.ReLU(),
-            nn.Linear(
-                config.pokemon_hidden_dim,
-                config.pokemon_output_dim,
-            ),
+            nn.Linear(config.pokemon_hidden_dim, config.pokemon_output_dim),
             nn.ReLU(),
         )
 
@@ -81,9 +62,7 @@ class PokemonEncoder(nn.Module):
         batch_size = species.shape[0]
 
         side = torch.tensor(
-            [0] * 6 + [1] * 6,
-            dtype=torch.long,
-            device=species.device,
+            [0] * 6 + [1] * 6, dtype=torch.long, device=species.device
         )
         side = side.unsqueeze(0).expand(batch_size, -1)
 
@@ -116,12 +95,9 @@ class PokemonEncoder(nn.Module):
 
         return self.network(x)
 
+
 class SimplifiedHistoryEncoder(nn.Module):
-    def __init__(
-        self,
-        config: ModelConfig,
-        numeric_feature_count: int,
-    ) -> None:
+    def __init__(self, config: ModelConfig, numeric_feature_count: int) -> None:
         super().__init__()
 
         self.kind_embedding = nn.Embedding(
@@ -130,19 +106,13 @@ class SimplifiedHistoryEncoder(nn.Module):
             padding_idx=0,
         )
         self.move_embedding = nn.Embedding(
-            config.move_count,
-            config.move_embedding_dim,
-            padding_idx=0,
+            config.move_count, config.move_embedding_dim, padding_idx=0
         )
         self.species_embedding = nn.Embedding(
-            config.species_count,
-            config.species_embedding_dim,
-            padding_idx=0,
+            config.species_count, config.species_embedding_dim, padding_idx=0
         )
         self.form_embedding = nn.Embedding(
-            config.form_count,
-            config.form_embedding_dim,
-            padding_idx=0,
+            config.form_count, config.form_embedding_dim, padding_idx=0
         )
         self.ref_embedding = nn.Embedding(
             config.history_ref_count,
@@ -166,10 +136,7 @@ class SimplifiedHistoryEncoder(nn.Module):
         )
 
         self.entry_encoder = nn.Sequential(
-            nn.Linear(
-                input_dim,
-                config.tactical_entry_hidden_dim,
-            ),
+            nn.Linear(input_dim, config.tactical_entry_hidden_dim),
             nn.ReLU(),
             nn.Linear(
                 config.tactical_entry_hidden_dim,
@@ -218,10 +185,7 @@ class SimplifiedHistoryEncoder(nn.Module):
         safe_lengths = actual_lengths.clamp(min=1)
 
         packed = nn.utils.rnn.pack_padded_sequence(
-            x,
-            safe_lengths.cpu(),
-            batch_first=True,
-            enforce_sorted=False,
+            x, safe_lengths.cpu(), batch_first=True, enforce_sorted=False
         )
 
         _, hidden = self.gru(packed)
@@ -234,18 +198,13 @@ class SimplifiedHistoryEncoder(nn.Module):
 
         return result
 
+
 class FieldEncoder(nn.Module):
-    def __init__(
-        self,
-        config: ModelConfig,
-        numeric_feature_count: int,
-    ) -> None:
+    def __init__(self, config: ModelConfig, numeric_feature_count: int) -> None:
         super().__init__()
 
         self.weather_embedding = nn.Embedding(
-            config.weather_count,
-            config.weather_embedding_dim,
-            padding_idx=0,
+            config.weather_count, config.weather_embedding_dim, padding_idx=0
         )
 
         self.network = nn.Sequential(
@@ -254,27 +213,13 @@ class FieldEncoder(nn.Module):
                 config.field_hidden_dim,
             ),
             nn.ReLU(),
-            nn.Linear(
-                config.field_hidden_dim,
-                config.field_output_dim,
-            ),
+            nn.Linear(config.field_hidden_dim, config.field_output_dim),
             nn.ReLU(),
         )
 
-    def forward(
-        self,
-        *,
-        weather: Tensor,
-        numeric: Tensor,
-    ) -> Tensor:
+    def forward(self, *, weather: Tensor, numeric: Tensor) -> Tensor:
         weather_emb = self.weather_embedding(weather)
 
-        x = torch.cat(
-            (
-                weather_emb,
-                numeric,
-            ),
-            dim=-1,
-        )
+        x = torch.cat((weather_emb, numeric), dim=-1)
 
         return self.network(x)

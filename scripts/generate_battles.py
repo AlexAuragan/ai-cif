@@ -109,20 +109,17 @@ class RecordingRandomHandler(RandomMoveCombatHandler):
         return self.records[mark:]
 
     def select_top_actions(
-        self,
-        battle_state: BattleState,
+        self, battle_state: BattleState
     ) -> list[tuple[str, int]]:
         features = battle_to_features(battle_state)
 
         vector = vectorize_battle_features(
-            features,
-            config=self.vectorizer_config,
+            features, config=self.vectorizer_config
         )
 
         tactical = build_simplified_history(features.history)
         recent_tactical = tail_simplified_history(
-            tactical,
-            max_entries=self.tactical_history_length,
+            tactical, max_entries=self.tactical_history_length
         )
 
         oldest_recent_turn = _oldest_turn(recent_tactical)
@@ -131,8 +128,7 @@ class RecordingRandomHandler(RandomMoveCombatHandler):
             tactical_turn_span = 0
         else:
             tactical_turn_span = max(
-                0,
-                features.field.turn - oldest_recent_turn + 1,
+                0, features.field.turn - oldest_recent_turn + 1
             )
 
         ranked_actions = super().select_top_actions(battle_state)
@@ -160,9 +156,7 @@ class RecordingRandomHandler(RandomMoveCombatHandler):
         return ranked_actions
 
 
-def _oldest_turn(
-    history: tuple[SimplifiedHistoryEntry, ...],
-) -> int | None:
+def _oldest_turn(history: tuple[SimplifiedHistoryEntry, ...]) -> int | None:
     for entry in history:
         if entry.turn is not None:
             return entry.turn
@@ -178,8 +172,7 @@ async def run_battle(
     team_generator: SampleTeamGenerator | None,
 ) -> None:
     await asyncio.gather(
-        client_1.ensure_connected(),
-        client_2.ensure_connected(),
+        client_1.ensure_connected(), client_2.ensure_connected()
     )
 
     if client_1.username is None or client_2.username is None:
@@ -190,24 +183,14 @@ async def run_battle(
 
     if team_generator is not None:
         team_1 = await team_generator.generate(
-            fmt,
-            lambda team: client_1.validate_team(fmt, team),
+            fmt, lambda team: client_1.validate_team(fmt, team)
         )
         team_2 = await team_generator.generate(
-            fmt,
-            lambda team: client_2.validate_team(fmt, team),
+            fmt, lambda team: client_2.validate_team(fmt, team)
         )
 
-    await client_1.challenge(
-        client_2.username,
-        fmt,
-        timeout=60,
-        team=team_1,
-    )
-    await client_2.accept_challenge(
-        client_1.username,
-        team=team_2,
-    )
+    await client_1.challenge(client_2.username, fmt, timeout=60, team=team_1)
+    await client_2.accept_challenge(client_1.username, team=team_2)
 
     await asyncio.gather(
         client_1.battle_manager.room_ready.wait(),
@@ -221,11 +204,7 @@ async def run_battle(
 
 
 def append_records(
-    output: Path,
-    *,
-    battle: int,
-    fmt: str,
-    records: list[DecisionRecord],
+    output: Path, *, battle: int, fmt: str, records: list[DecisionRecord]
 ) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
 
@@ -246,15 +225,13 @@ def _print_summary(records: list[DecisionRecord]) -> None:
     mature = [
         record
         for record in records
-        if record.recent_tactical_length > 0
-        and record.turn >= 10
+        if record.recent_tactical_length > 0 and record.turn >= 10
     ]
 
     sample = mature if mature else records
 
     raw_per_turn = [
-        record.raw_history_length / max(record.turn, 1)
-        for record in sample
+        record.raw_history_length / max(record.turn, 1) for record in sample
     ]
 
     tactical_per_turn = [
@@ -277,9 +254,7 @@ def _print_summary(records: list[DecisionRecord]) -> None:
     print()
     print("History summary")
     print("---------------")
-    print(
-        f"Decision points: {len(records)}"
-    )
+    print(f"Decision points: {len(records)}")
     print(
         "Average raw events / current turn: "
         f"{sum(raw_per_turn) / len(raw_per_turn):.2f}"
@@ -291,10 +266,7 @@ def _print_summary(records: list[DecisionRecord]) -> None:
 
     if compression:
         average_compression = sum(compression) / len(compression)
-        print(
-            "Average tactical/raw history ratio: "
-            f"{average_compression:.3f}"
-        )
+        print(f"Average tactical/raw history ratio: {average_compression:.3f}")
 
     if spans:
         ordered = sorted(spans)
@@ -327,16 +299,9 @@ async def generate(
     team_seed: int,
 ) -> None:
 
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-
-    device = torch.device(
-        "cuda" if torch.cuda.is_available() else "cpu"
-    )
-
-    tensorizer = BattleTensorizer(
-        max_history=32,
-        vocab_gen=4,
-    )
+    tensorizer = BattleTensorizer(max_history=32, vocab_gen=4)
 
     config = ModelConfig(
         species_count=tensorizer.species_vocab_size,
@@ -344,10 +309,8 @@ async def generate(
         move_count=tensorizer.move_vocab_size,
         item_count=tensorizer.item_vocab_size,
         ability_count=tensorizer.ability_vocab_size,
-
         status_count=STATUS_VOCAB_SIZE,
         weather_count=WEATHER_VOCAB_SIZE,
-
         tactical_event_type_count=HISTORY_KIND_VOCAB_SIZE,
         history_ref_count=HISTORY_REF_VOCAB_SIZE,
         history_reason_count=CANT_REASON_VOCAB_SIZE,
@@ -361,22 +324,13 @@ async def generate(
     )
 
     neural_handler = NeuralCombatHandler(
-        model=model,
-        tensorizer=tensorizer,
-        device=device,
+        model=model, tensorizer=tensorizer, device=device
     )
 
     random_handler = RandomMoveCombatHandler()
 
-
-    client_1 = Client(
-        websocket_url,
-        combat_handler=neural_handler,
-    )
-    client_2 = Client(
-        websocket_url,
-        combat_handler=random_handler,
-    )
+    client_1 = Client(websocket_url, combat_handler=neural_handler)
+    client_2 = Client(websocket_url, combat_handler=random_handler)
 
     team_generator: SampleTeamGenerator | None = None
     if "randombattle" not in fmt:
@@ -386,39 +340,24 @@ async def generate(
     output.write_text("", encoding="utf-8")
 
     try:
-        await asyncio.gather(
-            client_1.connect(),
-            client_2.connect(),
-        )
-        await asyncio.gather(
-            client_1.login("BOT1"),
-            client_2.login("BOT2"),
-        )
+        await asyncio.gather(client_1.connect(), client_2.connect())
+        await asyncio.gather(client_1.login("BOT1"), client_2.login("BOT2"))
 
         print("BOT1 connected")
         print("BOT2 connected")
 
         progress = tqdm(
-            range(1, battles + 1),
-            desc=fmt,
-            unit="battle",
-            dynamic_ncols=True,
+            range(1, battles + 1), desc=fmt, unit="battle", dynamic_ncols=True
         )
 
         for battle_number in progress:
-
             await run_battle(
-                client_1,
-                client_2,
-                fmt=fmt,
-                team_generator=team_generator,
+                client_1, client_2, fmt=fmt, team_generator=team_generator
             )
 
     finally:
         await asyncio.gather(
-            client_1.close(),
-            client_2.close(),
-            return_exceptions=True,
+            client_1.close(), client_2.close(), return_exceptions=True
         )
 
 
@@ -437,10 +376,7 @@ def parse_args() -> argparse.Namespace:
         help="Showdown battle format",
     )
     parser.add_argument(
-        "--battles",
-        type=int,
-        default=100,
-        help="Number of battles to generate",
+        "--battles", type=int, default=100, help="Number of battles to generate"
     )
     parser.add_argument(
         "--history-length",

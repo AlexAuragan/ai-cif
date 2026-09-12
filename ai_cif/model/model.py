@@ -34,18 +34,13 @@ class BattleModel(nn.Module):
         self.config = config
 
         self.pokemon_encoder = PokemonEncoder(
-            config,
-            pokemon_numeric_feature_count,
+            config, pokemon_numeric_feature_count
         )
 
-        self.field_encoder = FieldEncoder(
-            config,
-            field_numeric_feature_count,
-        )
+        self.field_encoder = FieldEncoder(config, field_numeric_feature_count)
 
         self.history_encoder = SimplifiedHistoryEncoder(
-            config,
-            tactical_numeric_feature_count,
+            config, tactical_numeric_feature_count
         )
 
         state_dim = (
@@ -57,27 +52,19 @@ class BattleModel(nn.Module):
         self.trunk = nn.Sequential(
             nn.Linear(state_dim, config.trunk_hidden_dim),
             nn.ReLU(),
-            nn.Linear(
-                config.trunk_hidden_dim,
-                config.trunk_output_dim,
-            ),
+            nn.Linear(config.trunk_hidden_dim, config.trunk_output_dim),
             nn.ReLU(),
         )
 
         self.policy_head = nn.Linear(
-            config.trunk_output_dim,
-            config.action_count,
+            config.trunk_output_dim, config.action_count
         )
 
         self.value_head = nn.Sequential(
-            nn.Linear(config.trunk_output_dim, 1),
-            nn.Tanh(),
+            nn.Linear(config.trunk_output_dim, 1), nn.Tanh()
         )
 
-    def forward(
-        self,
-        batch: BattleBatch,
-    ) -> tuple[Tensor, Tensor]:
+    def forward(self, batch: BattleBatch) -> tuple[Tensor, Tensor]:
         pokemon = self.pokemon_encoder(
             base_species=batch.base_species_ids,
             species=batch.species_ids,
@@ -92,8 +79,7 @@ class BattleModel(nn.Module):
         pokemon = pokemon.flatten(start_dim=1)
 
         field = self.field_encoder(
-            weather=batch.weather_id,
-            numeric=batch.field_numeric,
+            weather=batch.weather_id, numeric=batch.field_numeric
         )
 
         history = self.history_encoder(
@@ -108,29 +94,19 @@ class BattleModel(nn.Module):
             length=batch.history_length,
         )
 
-        state = torch.cat(
-            (
-                pokemon,
-                field,
-                history,
-            ),
-            dim=-1,
-        )
+        state = torch.cat((pokemon, field, history), dim=-1)
 
         hidden = self.trunk(state)
 
         logits = self.policy_head(hidden)
 
         logits = logits.masked_fill(
-            ~batch.action_mask.bool(),
-            torch.finfo(logits.dtype).min,
+            ~batch.action_mask.bool(), torch.finfo(logits.dtype).min
         )
 
         value = self.value_head(hidden).squeeze(-1)
 
         return logits, value
-
-
 
 
 def create_battle_model(
@@ -139,10 +115,7 @@ def create_battle_model(
     max_history: int = 32,
     vocab_gen: int = 4,
 ) -> tuple[BattleModel, BattleTensorizer]:
-    tensorizer = BattleTensorizer(
-        max_history=max_history,
-        vocab_gen=vocab_gen,
-    )
+    tensorizer = BattleTensorizer(max_history=max_history, vocab_gen=vocab_gen)
 
     config = ModelConfig(
         species_count=tensorizer.species_vocab_size,

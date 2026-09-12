@@ -29,13 +29,8 @@ FORMAT = "gen1randombattle"
 BATTLE_COUNT = 4
 
 
-def create_model(
-    device: torch.device,
-) -> tuple[BattleModel, BattleTensorizer]:
-    tensorizer = BattleTensorizer(
-        max_history=32,
-        vocab_gen=4,
-    )
+def create_model(device: torch.device) -> tuple[BattleModel, BattleTensorizer]:
+    tensorizer = BattleTensorizer(max_history=32, vocab_gen=4)
 
     config = ModelConfig(
         species_count=tensorizer.species_vocab_size,
@@ -70,8 +65,7 @@ async def run_battle(
     team_generator: SampleTeamGenerator | None,
 ) -> tuple[BattleResult, BattleResult]:
     await asyncio.gather(
-        client_1.ensure_connected(),
-        client_2.ensure_connected(),
+        client_1.ensure_connected(), client_2.ensure_connected()
     )
 
     if client_1.username is None or client_2.username is None:
@@ -82,26 +76,16 @@ async def run_battle(
 
     if team_generator is not None:
         team_1 = await team_generator.generate(
-            fmt,
-            lambda team: client_1.validate_team(fmt, team),
+            fmt, lambda team: client_1.validate_team(fmt, team)
         )
 
         team_2 = await team_generator.generate(
-            fmt,
-            lambda team: client_2.validate_team(fmt, team),
+            fmt, lambda team: client_2.validate_team(fmt, team)
         )
 
-    await client_1.challenge(
-        client_2.username,
-        fmt,
-        timeout=60,
-        team=team_1,
-    )
+    await client_1.challenge(client_2.username, fmt, timeout=60, team=team_1)
 
-    await client_2.accept_challenge(
-        client_1.username,
-        team=team_2,
-    )
+    await client_2.accept_challenge(client_1.username, team=team_2)
 
     await asyncio.gather(
         client_1.battle_manager.room_ready.wait(),
@@ -116,10 +100,7 @@ async def run_battle(
     return result_1, result_2
 
 
-def outcome_for(
-    result: BattleResult,
-    username: str,
-) -> float:
+def outcome_for(result: BattleResult, username: str) -> float:
     if result.winner is None:
         return 0.0
 
@@ -130,38 +111,25 @@ def outcome_for(
 
 
 async def main() -> None:
-    device = torch.device(
-        "cuda" if torch.cuda.is_available() else "cpu"
-    )
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     print(f"Device: {device}")
 
     model, tensorizer = create_model(device)
 
-    parameter_count = sum(
-        parameter.numel()
-        for parameter in model.parameters()
-    )
+    parameter_count = sum(parameter.numel() for parameter in model.parameters())
 
     print(f"Model parameters: {parameter_count:,}")
 
     training_handler = TrainingCombatHandler(
-        model=model,
-        tensorizer=tensorizer,
-        device=device,
+        model=model, tensorizer=tensorizer, device=device
     )
 
     random_handler = RandomMoveCombatHandler()
 
-    neural_client = Client(
-        WEBSOCKET_URL,
-        combat_handler=training_handler,
-    )
+    neural_client = Client(WEBSOCKET_URL, combat_handler=training_handler)
 
-    random_client = Client(
-        WEBSOCKET_URL,
-        combat_handler=random_handler,
-    )
+    random_client = Client(WEBSOCKET_URL, combat_handler=random_handler)
 
     team_generator: SampleTeamGenerator | None = None
 
@@ -171,14 +139,10 @@ async def main() -> None:
     trajectories: list[Trajectory] = []
 
     try:
-        await asyncio.gather(
-            neural_client.connect(),
-            random_client.connect(),
-        )
+        await asyncio.gather(neural_client.connect(), random_client.connect())
 
         await asyncio.gather(
-            neural_client.login("BOT1"),
-            random_client.login("BOT2"),
+            neural_client.login("BOT1"), random_client.login("BOT2")
         )
 
         print()
@@ -198,19 +162,12 @@ async def main() -> None:
             if neural_client.username is None:
                 raise RuntimeError("Neural client lost its username")
 
-            outcome = outcome_for(
-                result,
-                neural_client.username,
-            )
+            outcome = outcome_for(result, neural_client.username)
 
-            trajectory = training_handler.finish_battle(
-                outcome
-            )
+            trajectory = training_handler.finish_battle(outcome)
 
             if not trajectory.decisions:
-                raise RuntimeError(
-                    "Collected a trajectory with no decisions"
-                )
+                raise RuntimeError("Collected a trajectory with no decisions")
 
             trajectories.append(trajectory)
 
@@ -222,9 +179,7 @@ async def main() -> None:
 
     finally:
         await asyncio.gather(
-            neural_client.close(),
-            random_client.close(),
-            return_exceptions=True,
+            neural_client.close(), random_client.close(), return_exceptions=True
         )
 
     print()
@@ -232,21 +187,14 @@ async def main() -> None:
     print("-----------------------")
 
     # Make sure start_battle() produced independent objects.
-    trajectory_ids = {
-        id(trajectory)
-        for trajectory in trajectories
-    }
+    trajectory_ids = {id(trajectory) for trajectory in trajectories}
 
     assert len(trajectory_ids) == len(trajectories)
 
     total_decisions = 0
 
     for trajectory in trajectories:
-        assert trajectory.outcome in {
-            -1.0,
-            0.0,
-            1.0,
-        }
+        assert trajectory.outcome in {-1.0, 0.0, 1.0}
 
         for decision in trajectory.decisions:
             assert 0 <= decision.action < 10
@@ -256,12 +204,8 @@ async def main() -> None:
 
             total_decisions += 1
 
-    print(
-        f"Trajectories: {len(trajectories)}"
-    )
-    print(
-        f"Decisions: {total_decisions}"
-    )
+    print(f"Trajectories: {len(trajectories)}")
+    print(f"Decisions: {total_decisions}")
 
     # Snapshot model before PPO.
     before = {
@@ -269,10 +213,7 @@ async def main() -> None:
         for name, parameter in model.named_parameters()
     }
 
-    optimizer = torch.optim.Adam(
-        model.parameters(),
-        lr=3e-4,
-    )
+    optimizer = torch.optim.Adam(model.parameters(), lr=3e-4)
 
     ppo_config = PPOConfig(
         learning_rate=3e-4,
@@ -311,9 +252,7 @@ async def main() -> None:
             changed_parameters.append(name)
 
     if not changed_parameters:
-        raise RuntimeError(
-            "PPO completed but no model parameters changed"
-        )
+        raise RuntimeError("PPO completed but no model parameters changed")
 
     print(f"policy_loss: {metrics.policy_loss:+.6f}")
     print(f"value_loss:  {metrics.value_loss:+.6f}")
@@ -321,10 +260,7 @@ async def main() -> None:
     print(f"total_loss:  {metrics.total_loss:+.6f}")
 
     print()
-    print(
-        f"Changed parameter tensors: "
-        f"{len(changed_parameters)}"
-    )
+    print(f"Changed parameter tensors: {len(changed_parameters)}")
 
     print()
     print("First changed parameters:")

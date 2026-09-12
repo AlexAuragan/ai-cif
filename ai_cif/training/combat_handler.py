@@ -20,11 +20,7 @@ class TrainingCombatHandler(NeuralCombatHandler):
         *,
         device: str | torch.device = "cpu",
     ) -> None:
-        super().__init__(
-            model=model,
-            tensorizer=tensorizer,
-            device=device,
-        )
+        super().__init__(model=model, tensorizer=tensorizer, device=device)
 
         self.trajectory = Trajectory()
 
@@ -35,25 +31,13 @@ class TrainingCombatHandler(NeuralCombatHandler):
     def finish_battle(self, outcome: float) -> Trajectory:
         """Attach the terminal outcome and return the completed trajectory."""
         if outcome not in {-1.0, 0.0, 1.0}:
-            raise ValueError(
-                f"Outcome must be -1, 0, or +1, got {outcome}"
-            )
+            raise ValueError(f"Outcome must be -1, 0, or +1, got {outcome}")
 
         self.trajectory.outcome = outcome
         return self.trajectory
 
     @override
-    def select_top_actions(
-        self,
-        battle_state: BattleState,
-    ) -> list[Action]:
-        print(
-                "TRAIN POLICY CALLED",
-                f"turn={battle_state.turn}",
-                f"team={len(battle_state.team)}",
-                f"moves={len(battle_state.available_moves)}",
-                f"force_switch={battle_state.force_switch}",
-            )
+    def select_top_actions(self, battle_state: BattleState) -> list[Action]:
 
         features = battle_to_features(battle_state)
 
@@ -81,16 +65,12 @@ class TrainingCombatHandler(NeuralCombatHandler):
         legal_indices = torch.where(legal_mask)[0]
 
         if legal_indices.numel() == 0:
-            raise RuntimeError(
-                "Model received a state with no legal actions"
-            )
+            raise RuntimeError("Model received a state with no legal actions")
 
         # Sample only among legal actions.
         legal_logits = logits[0, legal_indices]
 
-        distribution = torch.distributions.Categorical(
-            logits=legal_logits,
-        )
+        distribution = torch.distributions.Categorical(logits=legal_logits)
 
         sampled_position = distribution.sample()
         sampled_index = legal_indices[sampled_position]
@@ -118,22 +98,13 @@ class TrainingCombatHandler(NeuralCombatHandler):
         if remaining_indices.numel() > 0:
             remaining_scores = logits[0, remaining_indices]
 
-            order = torch.argsort(
-                remaining_scores,
-                descending=True,
-            )
+            order = torch.argsort(remaining_scores, descending=True)
 
             remaining_indices = remaining_indices[order]
 
         ranked_indices = [
             action_index,
-            *[
-                int(index.item())
-                for index in remaining_indices
-            ],
+            *[int(index.item()) for index in remaining_indices],
         ]
 
-        return [
-            self._decode_action(index)
-            for index in ranked_indices
-        ]
+        return [self._decode_action(index) for index in ranked_indices]

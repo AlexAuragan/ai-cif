@@ -27,6 +27,12 @@ class PPOMetrics:
     entropy: float
     total_loss: float
 
+    approx_kl: float
+    clip_fraction: float
+
+    mean_value: float
+    mean_return: float
+
 
 def ppo_update(
     *,
@@ -48,24 +54,18 @@ def ppo_update(
     if any(trajectory.outcome is None for trajectory in trajectories):
         raise ValueError("All trajectories must have a terminal outcome")
 
-    observations = [
-        decision.observation
-        for decision in decisions
-    ]
+    observations = [decision.observation for decision in decisions]
 
     actions = torch.tensor(
-        [decision.action for decision in decisions],
-        dtype=torch.long,
+        [decision.action for decision in decisions], dtype=torch.long
     )
 
     old_log_probs = torch.tensor(
-        [decision.log_prob for decision in decisions],
-        dtype=torch.float32,
+        [decision.log_prob for decision in decisions], dtype=torch.float32
     )
 
     old_values = torch.tensor(
-        [decision.value for decision in decisions],
-        dtype=torch.float32,
+        [decision.value for decision in decisions], dtype=torch.float32
     )
 
     returns = torch.cat(
@@ -82,9 +82,7 @@ def ppo_update(
     advantages = returns - old_values
 
     if advantages.numel() > 1:
-        advantages = (
-            advantages - advantages.mean()
-        ) / (
+        advantages = (advantages - advantages.mean()) / (
             advantages.std(unbiased=False) + 1e-8
         )
 
@@ -99,6 +97,8 @@ def ppo_update(
     value_losses: list[float] = []
     entropies: list[float] = []
     total_losses: list[float] = []
+    approx_kls: list[float] = []
+    clip_fractions: list[float] = []
 
     model.train()
 
@@ -106,14 +106,9 @@ def ppo_update(
         permutation = torch.randperm(count)
 
         for start in range(0, count, config.minibatch_size):
-            indices = permutation[
-                start : start + config.minibatch_size
-            ]
+            indices = permutation[start : start + config.minibatch_size]
 
-            examples = [
-                observations[int(index)]
-                for index in indices
-            ]
+            examples = [observations[int(index)] for index in indices]
 
             batch = collate_battles(examples).to(device)
 
@@ -126,33 +121,32 @@ def ppo_update(
 
             distribution = Categorical(logits=logits)
 
-            new_log_probs = distribution.log_prob(
-                batch_actions
-            )
+            new_log_probs = distribution.log_prob(batch_actions)
 
             entropy = distribution.entropy().mean()
 
-            ratio = torch.exp(
-                new_log_probs - batch_old_log_probs
+            log_ratio = new_log_probs - batch_old_log_probs
+
+            ratio = torch.exp(log_ratio)
+
+            approx_kl = ((ratio - 1.0) - log_ratio).mean()
+
+            clip_fraction = (
+                ((ratio - 1.0).abs() > config.clip_epsilon).float().mean()
             )
 
             unclipped = ratio * batch_advantages
 
-            clipped = torch.clamp(
-                ratio,
-                1.0 - config.clip_epsilon,
-                1.0 + config.clip_epsilon,
-            ) * batch_advantages
-
-            policy_loss = -torch.min(
-                unclipped,
-                clipped,
-            ).mean()
-
-            value_loss = torch.nn.functional.mse_loss(
-                values,
-                batch_returns,
+            clipped = (
+                torch.clamp(
+                    ratio, 1.0 - config.clip_epsilon, 1.0 + config.clip_epsilon
+                )
+                * batch_advantages
             )
+
+            policy_loss = -torch.min(unclipped, clipped).mean()
+
+            value_loss = torch.nn.functional.mse_loss(values, batch_returns)
 
             total_loss = (
                 policy_loss
@@ -164,8 +158,7 @@ def ppo_update(
             total_loss.backward()
 
             torch.nn.utils.clip_grad_norm_(
-                model.parameters(),
-                config.max_grad_norm,
+                model.parameters(), config.max_grad_norm
             )
 
             optimizer.step()
@@ -174,6 +167,8 @@ def ppo_update(
             value_losses.append(float(value_loss.item()))
             entropies.append(float(entropy.item()))
             total_losses.append(float(total_loss.item()))
+            approx_kls.append(float(approx_kl.item()))
+            clip_fractions.append(float(clip_fraction.item()))
 
     model.eval()
 
@@ -182,4 +177,8 @@ def ppo_update(
         value_loss=sum(value_losses) / len(value_losses),
         entropy=sum(entropies) / len(entropies),
         total_loss=sum(total_losses) / len(total_losses),
+        approx_kl=sum(approx_kls) / len(approx_kls),
+        clip_fraction=sum(clip_fractions) / len(clip_fractions),
+        mean_value=float(old_values.mean().item()),
+        mean_return=float(returns.mean().item()),
     )

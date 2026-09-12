@@ -1,4 +1,3 @@
-
 from dataclasses import dataclass
 from typing import Final
 
@@ -66,15 +65,7 @@ HISTORY_REF_SELF_UNKNOWN: Final = 13
 HISTORY_REF_OPPONENT_UNKNOWN: Final = 14
 HISTORY_REF_VOCAB_SIZE: Final = 15
 
-STATUS_NAMES: Final = (
-    "brn",
-    "frz",
-    "par",
-    "psn",
-    "slp",
-    "tox",
-    "fnt",
-)
+STATUS_NAMES: Final = ("brn", "frz", "par", "psn", "slp", "tox", "fnt")
 STATUS_IDS: Final = {name: i + 2 for i, name in enumerate(STATUS_NAMES)}
 STATUS_VOCAB_SIZE: Final = 2 + len(STATUS_NAMES)
 
@@ -194,6 +185,7 @@ HISTORY_NUMERIC_DIM: Final = 18
 
 
 ## Tensor containers
+
 
 @dataclass(frozen=True)
 class BattleTensors:
@@ -398,6 +390,7 @@ class BattleBatch:
 
 ## Tensorizer
 
+
 class BattleTensorizer:
     """Deterministic BattleFeatures -> BattleTensors converter."""
 
@@ -427,10 +420,7 @@ class BattleTensorizer:
         self.item_vocab_size = limits.item + 2
 
     def tensorize(
-        self,
-        features: BattleFeatures,
-        *,
-        device: DeviceLike | None = None,
+        self, features: BattleFeatures, *, device: DeviceLike | None = None
     ) -> BattleTensors:
         """Tensorize one battle observation."""
 
@@ -457,21 +447,20 @@ class BattleTensorizer:
             )
 
         categorical = self._tensorize_pokemon_categoricals(features)
-        pokemon_numeric, pokemon_mask = self._tensorize_pokemon_numeric(features)
+        pokemon_numeric, pokemon_mask = self._tensorize_pokemon_numeric(
+            features
+        )
 
         field_numeric = self._tensorize_field(features)
         weather_id = torch.tensor(
-            self._weather_token(features.field.weather),
-            dtype=torch.long,
+            self._weather_token(features.field.weather), dtype=torch.long
         )
 
         history = build_recent_simplified_history(
-            features.history,
-            max_entries=self.max_history,
+            features.history, max_entries=self.max_history
         )
         history_tensors = self._tensorize_history(
-            history=history,
-            current_turn=features.field.turn,
+            history=history, current_turn=features.field.turn
         )
 
         action_mask = self._tensorize_action_mask(features)
@@ -511,15 +500,13 @@ class BattleTensorizer:
     ## Pokémon
 
     def _tensorize_pokemon_categoricals(
-        self,
-        features: BattleFeatures,
+        self, features: BattleFeatures
     ) -> dict[str, Tensor]:
         base_species_ids = torch.zeros(POKEMON_SLOTS, dtype=torch.long)
         species_ids = torch.zeros(POKEMON_SLOTS, dtype=torch.long)
         form_ids = torch.zeros(POKEMON_SLOTS, dtype=torch.long)
         move_ids = torch.zeros(
-            (POKEMON_SLOTS, MOVES_PER_POKEMON),
-            dtype=torch.long,
+            (POKEMON_SLOTS, MOVES_PER_POKEMON), dtype=torch.long
         )
         item_ids = torch.zeros(POKEMON_SLOTS, dtype=torch.long)
         ability_ids = torch.zeros(POKEMON_SLOTS, dtype=torch.long)
@@ -543,8 +530,7 @@ class BattleTensorizer:
                     move_ids[row, move_slot] = self._move_token(move.name)
 
             item_ids[row] = self._item_token_known(
-                pokemon.item,
-                gen=features.format.gen,
+                pokemon.item, gen=features.format.gen
             )
             ability_ids[row] = self._ability_token_known(
                 pokemon.current_ability
@@ -566,12 +552,10 @@ class BattleTensorizer:
                 move_ids[row].fill_(UNKNOWN_ID)
 
                 item_ids[row] = self._enemy_item_token(
-                    pokemon.item,
-                    gen=features.format.gen,
+                    pokemon.item, gen=features.format.gen
                 )
                 ability_ids[row] = self._enemy_ability_token(
-                    pokemon.current_ability,
-                    gen=features.format.gen,
+                    pokemon.current_ability, gen=features.format.gen
                 )
                 status_ids[row] = NONE_ID
                 continue
@@ -589,12 +573,10 @@ class BattleTensorizer:
                 move_ids[row, move_slot] = self._knowledge_move_token(move)
 
             item_ids[row] = self._enemy_item_token(
-                pokemon.item,
-                gen=features.format.gen,
+                pokemon.item, gen=features.format.gen
             )
             ability_ids[row] = self._enemy_ability_token(
-                pokemon.current_ability,
-                gen=features.format.gen,
+                pokemon.current_ability, gen=features.format.gen
             )
             status_ids[row] = self._status_token(pokemon.status.major)
 
@@ -609,12 +591,10 @@ class BattleTensorizer:
         }
 
     def _tensorize_pokemon_numeric(
-        self,
-        features: BattleFeatures,
+        self, features: BattleFeatures
     ) -> tuple[Tensor, Tensor]:
         numeric = torch.zeros(
-            (POKEMON_SLOTS, POKEMON_NUMERIC_DIM),
-            dtype=torch.float32,
+            (POKEMON_SLOTS, POKEMON_NUMERIC_DIM), dtype=torch.float32
         )
         mask = torch.zeros(POKEMON_SLOTS, dtype=torch.bool)
 
@@ -753,7 +733,9 @@ class BattleTensorizer:
             field[7] = 1.0
 
         own = self._side_condition_vector(features.field.own_side_conditions)
-        enemy = self._side_condition_vector(features.field.enemy_side_conditions)
+        enemy = self._side_condition_vector(
+            features.field.enemy_side_conditions
+        )
         global_conditions = self._side_condition_vector(
             features.field.field_conditions
         )
@@ -773,10 +755,7 @@ class BattleTensorizer:
     def _side_condition_vector(
         conditions: tuple[SideConditionFeatures, ...],
     ) -> Tensor:
-        vector = torch.zeros(
-            len(SIDE_CONDITION_NAMES),
-            dtype=torch.float32,
-        )
+        vector = torch.zeros(len(SIDE_CONDITION_NAMES), dtype=torch.float32)
 
         for condition in conditions:
             index = SIDE_CONDITION_INDEX.get(condition.name)
@@ -791,10 +770,7 @@ class BattleTensorizer:
     ## Simplified history
 
     def _tensorize_history(
-        self,
-        *,
-        history: tuple[SimplifiedHistoryEntry, ...],
-        current_turn: int,
+        self, *, history: tuple[SimplifiedHistoryEntry, ...], current_turn: int
     ) -> dict[str, Tensor]:
         h = self.max_history
 
@@ -806,8 +782,7 @@ class BattleTensorizer:
         history_target = torch.zeros(h, dtype=torch.long)
         history_reason = torch.zeros(h, dtype=torch.long)
         history_numeric = torch.zeros(
-            (h, HISTORY_NUMERIC_DIM),
-            dtype=torch.float32,
+            (h, HISTORY_NUMERIC_DIM), dtype=torch.float32
         )
         history_mask = torch.zeros(h, dtype=torch.bool)
 
@@ -843,8 +818,7 @@ class BattleTensorizer:
                     history_numeric[index, 6] = 1.0
 
                 self._fill_move_hp_summary(
-                    row=history_numeric[index],
-                    entry=entry,
+                    row=history_numeric[index], entry=entry
                 )
 
             elif isinstance(entry, SwitchTacticalEntry):
@@ -857,9 +831,7 @@ class BattleTensorizer:
 
                 if entry.hp_ratio is not None:
                     history_numeric[index, 15] = _clamp_float(
-                        entry.hp_ratio,
-                        0.0,
-                        1.0,
+                        entry.hp_ratio, 0.0, 1.0
                     )
                     history_numeric[index, 16] = 1.0
 
@@ -890,10 +862,7 @@ class BattleTensorizer:
         }
 
     def _fill_move_hp_summary(
-        self,
-        *,
-        row: Tensor,
-        entry: MoveTacticalEntry,
+        self, *, row: Tensor, entry: MoveTacticalEntry
     ) -> None:
         target_delta = 0.0
         target_delta_known = False
@@ -905,9 +874,8 @@ class BattleTensorizer:
         effectiveness: float | None = None
 
         for hp_change in entry.hp_changes:
-            if (
-                hp_change.hp_delta is not None
-                and _same_ref(hp_change.target, entry.target)
+            if hp_change.hp_delta is not None and _same_ref(
+                hp_change.target, entry.target
             ):
                 target_delta += hp_change.hp_delta
                 target_delta_known = True
@@ -921,9 +889,8 @@ class BattleTensorizer:
                 ):
                     effectiveness = hp_change.effectiveness
 
-            if (
-                hp_change.hp_delta is not None
-                and _same_ref(hp_change.target, entry.actor)
+            if hp_change.hp_delta is not None and _same_ref(
+                hp_change.target, entry.actor
             ):
                 actor_delta += hp_change.hp_delta
                 actor_delta_known = True
@@ -995,7 +962,7 @@ class BattleTensorizer:
 
         try:
             species, form = pokemon_id(name, self.vocab_gen)
-        except (AssertionError, KeyError, TypeError, ValueError):
+        except AssertionError, KeyError, TypeError, ValueError:
             return UNKNOWN_ID, UNKNOWN_ID
 
         return species + REAL_ID_OFFSET, form + REAL_ID_OFFSET
@@ -1006,7 +973,7 @@ class BattleTensorizer:
 
         try:
             raw = move_id(name, self.vocab_gen)
-        except (AssertionError, KeyError, TypeError, ValueError):
+        except AssertionError, KeyError, TypeError, ValueError:
             return UNKNOWN_ID
 
         return raw + REAL_ID_OFFSET
@@ -1021,17 +988,12 @@ class BattleTensorizer:
 
         try:
             raw = item_id(name, self.vocab_gen)
-        except (AssertionError, KeyError, TypeError, ValueError):
+        except AssertionError, KeyError, TypeError, ValueError:
             return UNKNOWN_ID
 
         return raw + REAL_ID_OFFSET
 
-    def _ability_token_known(
-        self,
-        name: str | None,
-        *,
-        gen: int | None,
-    ) -> int:
+    def _ability_token_known(self, name: str | None, *, gen: int | None) -> int:
         # Abilities do not exist before Gen 3.
         if gen is not None and gen <= 2:
             return NONE_ID
@@ -1041,7 +1003,7 @@ class BattleTensorizer:
 
         try:
             raw = ability_id(name, self.vocab_gen)
-        except (AssertionError, KeyError, TypeError, ValueError):
+        except AssertionError, KeyError, TypeError, ValueError:
             return UNKNOWN_ID
 
         return raw + REAL_ID_OFFSET
@@ -1052,10 +1014,7 @@ class BattleTensorizer:
         return self._move_token(value.value)
 
     def _enemy_item_token(
-        self,
-        value: Knowledge[str],
-        *,
-        gen: int | None,
+        self, value: Knowledge[str], *, gen: int | None
     ) -> int:
         if gen == 1:
             return NONE_ID
@@ -1066,10 +1025,7 @@ class BattleTensorizer:
         return self._item_token_known(value.value, gen=gen)
 
     def _enemy_ability_token(
-        self,
-        value: Knowledge[str],
-        *,
-        gen: int | None,
+        self, value: Knowledge[str], *, gen: int | None
     ) -> int:
         if gen is not None and gen <= 2:
             return NONE_ID
@@ -1140,10 +1096,7 @@ class BattleTensorizer:
             "history_actor": (self.max_history,),
             "history_target": (self.max_history,),
             "history_reason": (self.max_history,),
-            "history_numeric": (
-                self.max_history,
-                HISTORY_NUMERIC_DIM,
-            ),
+            "history_numeric": (self.max_history, HISTORY_NUMERIC_DIM),
             "history_mask": (self.max_history,),
             "history_length": (),
             "action_mask": (ACTION_COUNT,),
@@ -1200,9 +1153,7 @@ def collate_battles(examples: list[BattleTensors]) -> BattleBatch:
             )
 
     return BattleBatch(
-        base_species_ids=torch.stack(
-            [x.base_species_ids for x in examples]
-        ),
+        base_species_ids=torch.stack([x.base_species_ids for x in examples]),
         species_ids=torch.stack([x.species_ids for x in examples]),
         form_ids=torch.stack([x.form_ids for x in examples]),
         move_ids=torch.stack([x.move_ids for x in examples]),
@@ -1215,20 +1166,14 @@ def collate_battles(examples: list[BattleTensors]) -> BattleBatch:
         field_numeric=torch.stack([x.field_numeric for x in examples]),
         history_kind=torch.stack([x.history_kind for x in examples]),
         history_move=torch.stack([x.history_move for x in examples]),
-        history_species=torch.stack(
-            [x.history_species for x in examples]
-        ),
+        history_species=torch.stack([x.history_species for x in examples]),
         history_form=torch.stack([x.history_form for x in examples]),
         history_actor=torch.stack([x.history_actor for x in examples]),
         history_target=torch.stack([x.history_target for x in examples]),
         history_reason=torch.stack([x.history_reason for x in examples]),
-        history_numeric=torch.stack(
-            [x.history_numeric for x in examples]
-        ),
+        history_numeric=torch.stack([x.history_numeric for x in examples]),
         history_mask=torch.stack([x.history_mask for x in examples]),
-        history_length=torch.stack(
-            [x.history_length for x in examples]
-        ),
+        history_length=torch.stack([x.history_length for x in examples]),
         action_mask=torch.stack([x.action_mask for x in examples]),
     )
 
@@ -1237,8 +1182,7 @@ def collate_battles(examples: list[BattleTensors]) -> BattleBatch:
 
 
 def _same_ref(
-    left: PokemonRefFeatures | None,
-    right: PokemonRefFeatures | None,
+    left: PokemonRefFeatures | None, right: PokemonRefFeatures | None
 ) -> bool:
     if left is None or right is None:
         return False
