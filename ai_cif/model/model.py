@@ -7,7 +7,18 @@ from ai_cif.model.encoders import (
     PokemonEncoder,
     SimplifiedHistoryEncoder,
 )
-from ai_cif.vectorization.tensorizer import BattleBatch
+from ai_cif.vectorization.tensorizer import (
+    CANT_REASON_VOCAB_SIZE,
+    FIELD_NUMERIC_DIM,
+    HISTORY_KIND_VOCAB_SIZE,
+    HISTORY_NUMERIC_DIM,
+    HISTORY_REF_VOCAB_SIZE,
+    POKEMON_NUMERIC_DIM,
+    STATUS_VOCAB_SIZE,
+    WEATHER_VOCAB_SIZE,
+    BattleBatch,
+    BattleTensorizer,
+)
 
 
 class BattleModel(nn.Module):
@@ -118,3 +129,41 @@ class BattleModel(nn.Module):
         value = self.value_head(hidden).squeeze(-1)
 
         return logits, value
+
+
+
+
+def create_battle_model(
+    *,
+    device: str | torch.device = "cpu",
+    max_history: int = 32,
+    vocab_gen: int = 4,
+) -> tuple[BattleModel, BattleTensorizer]:
+    tensorizer = BattleTensorizer(
+        max_history=max_history,
+        vocab_gen=vocab_gen,
+    )
+
+    config = ModelConfig(
+        species_count=tensorizer.species_vocab_size,
+        form_count=tensorizer.form_vocab_size,
+        move_count=tensorizer.move_vocab_size,
+        item_count=tensorizer.item_vocab_size,
+        ability_count=tensorizer.ability_vocab_size,
+        status_count=STATUS_VOCAB_SIZE,
+        weather_count=WEATHER_VOCAB_SIZE,
+        tactical_event_type_count=HISTORY_KIND_VOCAB_SIZE,
+        history_ref_count=HISTORY_REF_VOCAB_SIZE,
+        history_reason_count=CANT_REASON_VOCAB_SIZE,
+    )
+
+    model = BattleModel(
+        config=config,
+        pokemon_numeric_feature_count=POKEMON_NUMERIC_DIM,
+        field_numeric_feature_count=FIELD_NUMERIC_DIM,
+        tactical_numeric_feature_count=HISTORY_NUMERIC_DIM,
+    )
+
+    model.to(device)
+
+    return model, tensorizer

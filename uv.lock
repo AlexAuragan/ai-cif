@@ -485,8 +485,8 @@ wheels = [
 
 [[package]]
 name = "showdown-sdk"
-version = "0.2.1"
-source = { git = "https://github.com/AlexAuragan/Showdown-SDK.git#928f67076184cc76466660cc468d1889d3d94d1a" }
+version = "0.2.2"
+source = { git = "https://github.com/AlexAuragan/Showdown-SDK.git#821e271946168bcd83953cfdd3faac81cb25c30e" }
 dependencies = [
     { name = "aiohttp" },
     { name = "requests" },
