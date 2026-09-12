@@ -12,3 +12,4 @@ wheels/
 # Cache
 .ruff_cache
 data
+checkpoints
