@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import torch
 from showdown_sdk.classes.client import Client
 from showdown_sdk.classes.combat_handler import RandomMoveCombatHandler
 from showdown_sdk.features import battle_to_features
@@ -12,10 +13,24 @@ from showdown_sdk.models.sdk import BattleState, SampleTeamGenerator, TeamSet
 from showdown_sdk.vectorizer import VectorizerConfig, vectorize_battle_features
 from tqdm import tqdm
 
+from ai_cif.inference.combat_handler import NeuralCombatHandler
+from ai_cif.model.config import ModelConfig
+from ai_cif.model.model import BattleModel
 from ai_cif.vectorization.simplified_history import (
     SimplifiedHistoryEntry,
     build_simplified_history,
     tail_simplified_history,
+)
+from ai_cif.vectorization.tensorizer import (
+    CANT_REASON_VOCAB_SIZE,
+    FIELD_NUMERIC_DIM,
+    HISTORY_KIND_VOCAB_SIZE,
+    HISTORY_NUMERIC_DIM,
+    HISTORY_REF_VOCAB_SIZE,
+    POKEMON_NUMERIC_DIM,
+    STATUS_VOCAB_SIZE,
+    WEATHER_VOCAB_SIZE,
+    BattleTensorizer,
 )
 
 DEFAULT_WEBSOCKET_URL = "ws://127.0.0.1:8000/showdown/websocket"
@@ -311,26 +326,56 @@ async def generate(
     switch_chance: float,
     team_seed: int,
 ) -> None:
-    handler_1 = RecordingRandomHandler(
-        player="BOT1",
-        history_length=history_length,
-        tactical_history_length=tactical_history_length,
-        switch_chance=switch_chance,
+
+
+
+    device = torch.device(
+        "cuda" if torch.cuda.is_available() else "cpu"
     )
-    handler_2 = RecordingRandomHandler(
-        player="BOT2",
-        history_length=history_length,
-        tactical_history_length=tactical_history_length,
-        switch_chance=switch_chance,
+
+    tensorizer = BattleTensorizer(
+        max_history=32,
+        vocab_gen=4,
     )
+
+    config = ModelConfig(
+        species_count=tensorizer.species_vocab_size,
+        form_count=tensorizer.form_vocab_size,
+        move_count=tensorizer.move_vocab_size,
+        item_count=tensorizer.item_vocab_size,
+        ability_count=tensorizer.ability_vocab_size,
+
+        status_count=STATUS_VOCAB_SIZE,
+        weather_count=WEATHER_VOCAB_SIZE,
+
+        tactical_event_type_count=HISTORY_KIND_VOCAB_SIZE,
+        history_ref_count=HISTORY_REF_VOCAB_SIZE,
+        history_reason_count=CANT_REASON_VOCAB_SIZE,
+    )
+
+    model = BattleModel(
+        config=config,
+        pokemon_numeric_feature_count=POKEMON_NUMERIC_DIM,
+        field_numeric_feature_count=FIELD_NUMERIC_DIM,
+        tactical_numeric_feature_count=HISTORY_NUMERIC_DIM,
+    )
+
+    neural_handler = NeuralCombatHandler(
+        model=model,
+        tensorizer=tensorizer,
+        device=device,
+    )
+
+    random_handler = RandomMoveCombatHandler()
+
 
     client_1 = Client(
         websocket_url,
-        combat_handler=handler_1,
+        combat_handler=neural_handler,
     )
     client_2 = Client(
         websocket_url,
-        combat_handler=handler_2,
+        combat_handler=random_handler,
     )
 
     team_generator: SampleTeamGenerator | None = None
@@ -339,8 +384,6 @@ async def generate(
 
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text("", encoding="utf-8")
-
-    all_records: list[DecisionRecord] = []
 
     try:
         await asyncio.gather(
@@ -355,8 +398,6 @@ async def generate(
         print("BOT1 connected")
         print("BOT2 connected")
 
-        first_vector_length: int | None = None
-
         progress = tqdm(
             range(1, battles + 1),
             desc=fmt,
@@ -365,8 +406,6 @@ async def generate(
         )
 
         for battle_number in progress:
-            mark_1 = handler_1.start_battle()
-            mark_2 = handler_2.start_battle()
 
             await run_battle(
                 client_1,
@@ -374,51 +413,6 @@ async def generate(
                 fmt=fmt,
                 team_generator=team_generator,
             )
-
-            records = (
-                handler_1.records_since(mark_1)
-                + handler_2.records_since(mark_2)
-            )
-
-            append_records(
-                output,
-                battle=battle_number,
-                fmt=fmt,
-                records=records,
-            )
-
-            all_records.extend(records)
-
-            if records and first_vector_length is None:
-                first_vector_length = len(records[0].vector)
-
-            latest_spans = [
-                record.tactical_turn_span
-                for record in records
-                if record.tactical_turn_span > 0
-            ]
-
-            average_span = (
-                sum(latest_spans) / len(latest_spans)
-                if latest_spans
-                else 0.0
-            )
-
-            progress.set_postfix(
-                decisions=len(all_records),
-                vector_dim=first_vector_length or "?",
-                tactical_span=f"{average_span:.1f}t",
-            )
-
-        print()
-        print(
-            f"Wrote {len(all_records)} decision records to {output}"
-        )
-
-        if first_vector_length is not None:
-            print(f"Vector dimension: {first_vector_length}")
-
-        _print_summary(all_records)
 
     finally:
         await asyncio.gather(

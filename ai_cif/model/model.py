@@ -1,13 +1,13 @@
 import torch
 from torch import Tensor, nn
 
-from ai_cif.model.batches import BattleTensorBatch
 from ai_cif.model.config import ModelConfig
 from ai_cif.model.encoders import (
     FieldEncoder,
     PokemonEncoder,
-    TacticalHistoryEncoder,
+    SimplifiedHistoryEncoder,
 )
+from ai_cif.vectorization.tensorizer import BattleBatch
 
 
 class BattleModel(nn.Module):
@@ -32,7 +32,7 @@ class BattleModel(nn.Module):
             field_numeric_feature_count,
         )
 
-        self.history_encoder = TacticalHistoryEncoder(
+        self.history_encoder = SimplifiedHistoryEncoder(
             config,
             tactical_numeric_feature_count,
         )
@@ -65,13 +65,37 @@ class BattleModel(nn.Module):
 
     def forward(
         self,
-        batch: BattleTensorBatch,
+        batch: BattleBatch,
     ) -> tuple[Tensor, Tensor]:
-        pokemon = self.pokemon_encoder(batch.pokemon)
+        pokemon = self.pokemon_encoder(
+            base_species=batch.base_species_ids,
+            species=batch.species_ids,
+            form=batch.form_ids,
+            moves=batch.move_ids,
+            item=batch.item_ids,
+            ability=batch.ability_ids,
+            status=batch.status_ids,
+            numeric=batch.pokemon_numeric,
+        )
+
         pokemon = pokemon.flatten(start_dim=1)
 
-        field = self.field_encoder(batch.field)
-        history = self.history_encoder(batch.history)
+        field = self.field_encoder(
+            weather=batch.weather_id,
+            numeric=batch.field_numeric,
+        )
+
+        history = self.history_encoder(
+            kind=batch.history_kind,
+            move=batch.history_move,
+            species=batch.history_species,
+            form=batch.history_form,
+            actor=batch.history_actor,
+            target=batch.history_target,
+            reason=batch.history_reason,
+            numeric=batch.history_numeric,
+            length=batch.history_length,
+        )
 
         state = torch.cat(
             (
@@ -87,34 +111,10 @@ class BattleModel(nn.Module):
         logits = self.policy_head(hidden)
 
         logits = logits.masked_fill(
-            ~batch.legal_actions.bool(),
+            ~batch.action_mask.bool(),
             torch.finfo(logits.dtype).min,
         )
 
         value = self.value_head(hidden).squeeze(-1)
 
         return logits, value
-
-if __name__ == "__main__":
-    config = ModelConfig(
-        species_count=200,
-        move_count=300,
-        item_count=32,
-        ability_count=32,
-        status_count=16,
-        tactical_event_type_count=16,
-    )
-
-    model = BattleModel(
-        config=config,
-        pokemon_numeric_feature_count=16,
-        field_numeric_feature_count=32,
-        tactical_numeric_feature_count=16,
-    )
-
-    parameter_count = sum(
-        parameter.numel()
-        for parameter in model.parameters()
-    )
-
-    print(f"{parameter_count:,} parameters")
