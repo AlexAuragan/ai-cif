@@ -11,5 +11,8 @@ wheels/
 
 # Cache
 .ruff_cache
+
+# data
 data
 checkpoints
+wandb

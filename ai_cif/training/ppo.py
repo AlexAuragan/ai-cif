@@ -51,7 +51,7 @@ def ppo_update(
     if not decisions:
         raise ValueError("No decisions to train on")
 
-    if any(trajectory.outcome is None for trajectory in trajectories):
+    if any(trajectory.reward is None for trajectory in trajectories):
         raise ValueError("All trajectories must have a terminal outcome")
 
     observations = [decision.observation for decision in decisions]
@@ -72,7 +72,7 @@ def ppo_update(
         [
             torch.full(
                 (len(trajectory.decisions),),
-                float(trajectory.outcome or 0),
+                float(trajectory.reward or 0),
                 dtype=torch.float32,
             )
             for trajectory in trajectories

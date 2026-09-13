@@ -3,6 +3,7 @@ import asyncio
 import multiprocessing
 import tempfile
 from concurrent.futures import ProcessPoolExecutor
+from dataclasses import asdict
 from functools import partial
 from pathlib import Path
 from time import perf_counter
@@ -11,17 +12,20 @@ import torch
 from showdown_sdk.classes.client import Client
 from showdown_sdk.classes.combat_handler import RandomMoveCombatHandler
 from showdown_sdk.classes.dt import BattleResult
+from showdown_sdk.exceptions import BattleLifecycleError
 from showdown_sdk.models.sdk import (
     SampleTeamGenerator,
     TeamSet,
     print_reproduction_teams,
 )
 
+import wandb
 from ai_cif.inference.combat_handler import NeuralCombatHandler
 from ai_cif.model.config import ModelConfig
 from ai_cif.model.model import BattleModel
 from ai_cif.training.combat_handler import TrainingCombatHandler
 from ai_cif.training.ppo import PPOConfig, PPOMetrics, ppo_update
+from ai_cif.training.rewards import RewardConfig, breakdown_for
 from ai_cif.training.trajectory import Trajectory
 from ai_cif.vectorization.tensorizer import (
     CANT_REASON_VOCAB_SIZE,
@@ -36,6 +40,14 @@ from ai_cif.vectorization.tensorizer import (
 )
 
 DEFAULT_WEBSOCKET_URL = "ws://127.0.0.1:8000/showdown/websocket"
+
+REWARD_CONFIG = RewardConfig(
+    outcome_weight=0,
+    own_hp_weight=0.5,
+    enemy_hp_weight=0.5,
+    speed_weight=0.0,
+    speed_scale=40.0,
+)
 
 
 def create_model(device: torch.device) -> tuple[BattleModel, BattleTensorizer]:
@@ -107,14 +119,15 @@ async def run_battle(
         team_1 = await team_generator.generate(
             fmt, lambda team: client_1.validate_team(fmt, team)
         )
-
         team_2 = await team_generator.generate(
             fmt, lambda team: client_2.validate_team(fmt, team)
         )
 
     await client_1.challenge(client_2.username, fmt, timeout=60, team=team_1)
-
     await client_2.accept_challenge(client_1.username, team=team_2)
+
+    battle_waiter_1: asyncio.Task[BattleResult] | None = None
+    battle_waiter_2: asyncio.Task[BattleResult] | None = None
 
     try:
         await asyncio.gather(
@@ -122,12 +135,50 @@ async def run_battle(
             client_2.battle_manager.room_ready.wait(),
         )
 
-        return await asyncio.gather(
-            client_1.wait_for_battle_end(timeout=300),
-            client_2.wait_for_battle_end(timeout=300),
+        battle_waiter_1 = asyncio.create_task(
+            client_1.wait_for_battle_end(timeout=300)
         )
-    except BaseException:
-        print_reproduction_teams(team_1, team_2)
+        battle_waiter_2 = asyncio.create_task(
+            client_2.wait_for_battle_end(timeout=300)
+        )
+
+        result_1, result_2 = await asyncio.gather(
+            battle_waiter_1, battle_waiter_2
+        )
+
+        return result_1, result_2
+
+    except BaseException as error:
+        waiters = [
+            waiter
+            for waiter in (battle_waiter_1, battle_waiter_2)
+            if waiter is not None
+        ]
+
+        for waiter in waiters:
+            if not waiter.done():
+                waiter.cancel()
+
+        if waiters:
+            await asyncio.gather(*waiters, return_exceptions=True)
+
+        client_1.battle_manager.abandon_battle(error)
+        client_2.battle_manager.abandon_battle(error)
+
+        if team_generator is not None:
+            print_reproduction_teams(team_1, team_2)
+        else:
+            print("\n========== TEAM 1 ==========")
+            for pokemon in client_1.battle_manager.battle_state.team:
+                print(pokemon)
+
+            print("\n========== TEAM 2 ==========")
+
+            for pokemon in client_2.battle_manager.battle_state.team:
+                print(pokemon)
+
+            print("============================\n")
+
         raise
 
 
@@ -157,16 +208,36 @@ async def collect_trajectories(
 
     trajectories: list[Trajectory] = []
 
-    for _ in range(battles):
+    while len(trajectories) < battles:
         handler.start_battle()
 
-        result, _ = await run_battle(
-            neural_client, random_client, fmt=fmt, team_generator=team_generator
-        )
+        try:
+            result, _ = await run_battle(
+                neural_client,
+                random_client,
+                fmt=fmt,
+                team_generator=team_generator,
+            )
+        except BattleLifecycleError as error:
+            print(f"Discarding failed battle and retrying: {error!r}")
+
+            await asyncio.gather(
+                neural_client.close(),
+                random_client.close(),
+                return_exceptions=True,
+            )
+
+            await asyncio.gather(
+                neural_client.ensure_connected(),
+                random_client.ensure_connected(),
+            )
+
+            continue
 
         outcome = outcome_for(result, neural_client.username)
+        breakdown = breakdown_for(result, outcome, config=REWARD_CONFIG)
 
-        trajectory = handler.finish_battle(outcome)
+        trajectory = handler.finish_battle(outcome, breakdown)
 
         if not trajectory.decisions:
             raise RuntimeError("Collected empty trajectory")
@@ -504,6 +575,21 @@ async def evaluate_multiprocess(
     return wins, losses, ties
 
 
+def mean_trajectory_reward(trajectories: list[Trajectory]) -> float:
+    if not trajectories:
+        raise ValueError("Cannot summarize empty trajectories")
+
+    rewards: list[float] = []
+
+    for trajectory in trajectories:
+        if trajectory.reward is None:
+            raise ValueError("All trajectories must have a reward")
+
+        rewards.append(float(trajectory.reward))
+
+    return sum(rewards) / len(rewards)
+
+
 def summarize_training(
     trajectories: list[Trajectory],
 ) -> tuple[int, int, int, int]:
@@ -588,19 +674,49 @@ async def train(args: argparse.Namespace) -> None:
         model.parameters(), lr=ppo_config.learning_rate
     )
 
+    wandb_run = None
+
+    if not args.no_wandb:
+        wandb_run = wandb.init(
+            project=args.wandb_project,
+            entity=args.wandb_entity,
+            name=args.wandb_name,
+            config={
+                "format": args.fmt,
+                "iterations": args.iterations,
+                "rollout_battles": (args.rollout_battles),
+                "eval_battles": (args.eval_battles),
+                "eval_interval": (args.eval_interval),
+                "learning_rate": (args.learning_rate),
+                "workers": args.workers,
+                "worker_torch_threads": (args.worker_torch_threads),
+                "team_seed": args.team_seed,
+                "checkpoint_dir": str(args.checkpoint_dir),
+                "training_device": str(device),
+                "parameter_count": parameter_count,
+                "ppo_clip_epsilon": (ppo_config.clip_epsilon),
+                "ppo_value_coef": (ppo_config.value_coef),
+                "ppo_entropy_coef": (ppo_config.entropy_coef),
+                "ppo_epochs": (ppo_config.epochs),
+                "ppo_minibatch_size": (ppo_config.minibatch_size),
+                "reward_config": asdict(REWARD_CONFIG),
+            },
+        )
+
     context = multiprocessing.get_context("spawn")
 
-    pool = ProcessPoolExecutor(
-        max_workers=args.workers,
-        mp_context=context,
-        initializer=_worker_initializer,
-        initargs=(args.worker_torch_threads,),
-    )
-
+    pool: ProcessPoolExecutor | None = None
     pool_terminated = False
     phase_id = 0
 
     try:
+        pool = ProcessPoolExecutor(
+            max_workers=args.workers,
+            mp_context=context,
+            initializer=_worker_initializer,
+            initargs=(args.worker_torch_threads,),
+        )
+
         with tempfile.TemporaryDirectory(
             prefix="ai-cif-rollouts-"
         ) as temporary_directory_string:
@@ -626,21 +742,44 @@ async def train(args: argparse.Namespace) -> None:
 
             evaluation_seconds = perf_counter() - evaluation_start
 
+            initial_win_rate = wins / args.eval_battles
+
+            best_eval_win_rate = initial_win_rate
+
             print(
                 f"wins={wins} "
                 f"losses={losses} "
                 f"ties={ties} "
-                f"win_rate={wins / args.eval_battles:.1%}"
+                f"win_rate="
+                f"{initial_win_rate:.1%}"
             )
 
             print(
-                f"evaluation_time={evaluation_seconds:.2f}s "
+                f"evaluation_time="
+                f"{evaluation_seconds:.2f}s "
                 f"battles/s="
                 f"{args.eval_battles / evaluation_seconds:.2f}"
             )
 
+            if wandb_run is not None:
+                wandb_run.log(
+                    {
+                        "eval/wins": wins,
+                        "eval/losses": losses,
+                        "eval/ties": ties,
+                        "eval/win_rate": (initial_win_rate),
+                        "eval/best_win_rate": (best_eval_win_rate),
+                        "eval/seconds": (evaluation_seconds),
+                        "eval/battles_per_second": (
+                            args.eval_battles / evaluation_seconds
+                        ),
+                    },
+                    step=0,
+                )
+
             for iteration in range(1, args.iterations + 1):
                 phase_id += 1
+
                 rollout_start = perf_counter()
 
                 trajectories = await collect_trajectories_multiprocess(
@@ -649,15 +788,19 @@ async def train(args: argparse.Namespace) -> None:
                     url=args.url,
                     fmt=args.fmt,
                     team_seed=args.team_seed,
-                    battles=args.rollout_battles,
-                    worker_count=args.workers,
+                    battles=(args.rollout_battles),
+                    worker_count=(args.workers),
                     phase_id=phase_id,
-                    temporary_directory=temporary_directory,
+                    temporary_directory=(temporary_directory),
                 )
 
                 rollout_seconds = perf_counter() - rollout_start
 
-                wins, losses, ties, decisions = summarize_training(trajectories)
+                (wins, losses, ties, decisions) = summarize_training(
+                    trajectories
+                )
+
+                mean_reward = mean_trajectory_reward(trajectories)
 
                 ppo_start = perf_counter()
 
@@ -671,19 +814,39 @@ async def train(args: argparse.Namespace) -> None:
 
                 ppo_seconds = perf_counter() - ppo_start
 
+                battle_count = len(trajectories)
+
+                train_win_rate = wins / battle_count
+
+                mean_decisions = decisions / battle_count
+
+                breakdowns = [
+                    trajectory.reward_breakdown for trajectory in trajectories
+                ]
+
+                if any(breakdown is None for breakdown in breakdowns):
+                    raise RuntimeError("Missing reward breakdown")
+
+                reward_breakdowns = [
+                    breakdown
+                    for breakdown in breakdowns
+                    if breakdown is not None
+                ]
+
                 print()
                 print(
                     f"iteration={iteration} "
-                    f"battles={len(trajectories)} "
+                    f"battles={battle_count} "
                     f"decisions={decisions}"
                 )
 
                 print(f"train wins={wins} losses={losses} ties={ties}")
 
                 print(
-                    f"rollout_time={rollout_seconds:.2f}s "
+                    f"rollout_time="
+                    f"{rollout_seconds:.2f}s "
                     f"battles/s="
-                    f"{len(trajectories) / rollout_seconds:.2f} "
+                    f"{battle_count / rollout_seconds:.2f} "
                     f"decisions/s="
                     f"{decisions / rollout_seconds:.1f}"
                 )
@@ -692,8 +855,71 @@ async def train(args: argparse.Namespace) -> None:
 
                 print_metrics(metrics)
 
+                log_data = {
+                    "train/battles": battle_count,
+                    "train/decisions": decisions,
+                    "train/wins": wins,
+                    "train/losses": losses,
+                    "train/ties": ties,
+                    "train/win_rate": (train_win_rate),
+                    "train/mean_reward": (mean_reward),
+                    "train/mean_decisions_per_battle": (mean_decisions),
+                    "rollout/seconds": (rollout_seconds),
+                    "rollout/battles_per_second": (
+                        battle_count / rollout_seconds
+                    ),
+                    "rollout/decisions_per_second": (
+                        decisions / rollout_seconds
+                    ),
+                    "ppo/seconds": ppo_seconds,
+                    "ppo/policy_loss": (metrics.policy_loss),
+                    "ppo/value_loss": (metrics.value_loss),
+                    "ppo/entropy": (metrics.entropy),
+                    "ppo/total_loss": (metrics.total_loss),
+                    "ppo/approx_kl": (metrics.approx_kl),
+                    "ppo/clip_fraction": (metrics.clip_fraction),
+                    "ppo/mean_value": (metrics.mean_value),
+                    "ppo/mean_return": (metrics.mean_return),
+                    "optimizer/learning_rate": (
+                        optimizer.param_groups[0]["lr"]
+                    ),
+                    "reward/total": sum(
+                        item.total for item in reward_breakdowns
+                    )
+                    / battle_count,
+                    "reward/outcome": sum(
+                        item.outcome for item in reward_breakdowns
+                    )
+                    / battle_count,
+                    "reward/own_hp": sum(
+                        item.own_hp for item in reward_breakdowns
+                    )
+                    / battle_count,
+                    "reward/enemy_damage": sum(
+                        item.enemy_damage for item in reward_breakdowns
+                    )
+                    / battle_count,
+                    "reward/speed": sum(
+                        item.speed for item in reward_breakdowns
+                    )
+                    / battle_count,
+                    "battle/own_hp_fraction": sum(
+                        item.own_hp_fraction for item in reward_breakdowns
+                    )
+                    / battle_count,
+                    "battle/enemy_hp_fraction": sum(
+                        item.enemy_hp_fraction for item in reward_breakdowns
+                    )
+                    / battle_count,
+                    "battle/mean_moves": sum(
+                        item.move_count for item in reward_breakdowns
+                    )
+                    / battle_count,
+                }
+
                 if iteration % args.eval_interval == 0:
                     phase_id += 1
+
                     evaluation_start = perf_counter()
 
                     (
@@ -705,9 +931,9 @@ async def train(args: argparse.Namespace) -> None:
                         model=model,
                         url=args.url,
                         fmt=args.fmt,
-                        team_seed=args.team_seed,
-                        battles=args.eval_battles,
-                        worker_count=args.workers,
+                        team_seed=(args.team_seed),
+                        battles=(args.eval_battles),
+                        worker_count=(args.workers),
                         phase_id=phase_id,
                     )
 
@@ -715,8 +941,11 @@ async def train(args: argparse.Namespace) -> None:
 
                     win_rate = eval_wins / args.eval_battles
 
+                    best_eval_win_rate = max(best_eval_win_rate, win_rate)
+
                     print(
-                        f"EVAL iteration={iteration} "
+                        f"EVAL "
+                        f"iteration={iteration} "
                         f"wins={eval_wins} "
                         f"losses={eval_losses} "
                         f"ties={eval_ties} "
@@ -724,13 +953,30 @@ async def train(args: argparse.Namespace) -> None:
                     )
 
                     print(
-                        f"eval_time={evaluation_seconds:.2f}s "
+                        f"eval_time="
+                        f"{evaluation_seconds:.2f}s "
                         f"battles/s="
                         f"{args.eval_battles / evaluation_seconds:.2f}"
                     )
 
+                    log_data.update(
+                        {
+                            "eval/wins": (eval_wins),
+                            "eval/losses": (eval_losses),
+                            "eval/ties": (eval_ties),
+                            "eval/win_rate": (win_rate),
+                            "eval/best_win_rate": (best_eval_win_rate),
+                            "eval/seconds": (evaluation_seconds),
+                            "eval/battles_per_second": (
+                                args.eval_battles / evaluation_seconds
+                            ),
+                        }
+                    )
+
                     checkpoint = (
-                        args.checkpoint_dir / f"iteration_{iteration:05d}.pt"
+                        args.checkpoint_dir
+                        / args.wandb_name
+                        / (f"iteration_{iteration:05d}.pt")
                     )
 
                     save_checkpoint(
@@ -741,22 +987,36 @@ async def train(args: argparse.Namespace) -> None:
                     )
 
                     save_checkpoint(
-                        path=(args.checkpoint_dir / "latest.pt"),
+                        path=(
+                            args.checkpoint_dir / args.wandb_name / "latest.pt"
+                        ),
                         model=model,
                         optimizer=optimizer,
                         iteration=iteration,
                     )
 
+                if wandb_run is not None:
+                    #
+                    # Exactly one log call for each
+                    # training iteration. Evaluation
+                    # values are included when this
+                    # was an evaluation iteration.
+                    #
+                    wandb_run.log(log_data, step=iteration)
+
     except BaseException:
-        # Python 3.14: do not leave long-running rollout children alive after
-        # Ctrl-C or a worker failure.
-        pool_terminated = True
-        pool.terminate_workers()
+        if pool is not None:
+            pool_terminated = True
+            pool.terminate_workers()
+
         raise
 
     finally:
-        if not pool_terminated:
+        if pool is not None and not pool_terminated:
             pool.shutdown(wait=True, cancel_futures=True)
+
+        if wandb_run is not None:
+            wandb_run.finish()
 
 
 def parse_args() -> argparse.Namespace:
@@ -795,6 +1055,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--checkpoint-dir", type=Path, default=Path("checkpoints")
     )
+
+    parser.add_argument("--wandb-project", default="ai-cif")
+
+    parser.add_argument("--wandb-entity", default=None)
+
+    parser.add_argument("--wandb-name", default=None)
+
+    parser.add_argument("--no-wandb", action="store_true")
 
     args = parser.parse_args()
 

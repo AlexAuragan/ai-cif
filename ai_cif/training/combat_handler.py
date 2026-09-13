@@ -6,6 +6,7 @@ from showdown_sdk.models.sdk import BattleState
 
 from ai_cif.inference.combat_handler import Action, NeuralCombatHandler
 from ai_cif.model.model import BattleModel
+from ai_cif.training.rewards import RewardBreakdown
 from ai_cif.training.trajectory import Decision, Trajectory
 from ai_cif.vectorization.tensorizer import BattleTensorizer
 
@@ -28,12 +29,21 @@ class TrainingCombatHandler(NeuralCombatHandler):
         """Reset trajectory state before starting a new battle."""
         self.trajectory = Trajectory()
 
-    def finish_battle(self, outcome: float) -> Trajectory:
+    def finish_battle(
+        self, outcome: float, reward_breakdown: RewardBreakdown
+    ) -> Trajectory:
         """Attach the terminal outcome and return the completed trajectory."""
+        reward = reward_breakdown.total
         if outcome not in {-1.0, 0.0, 1.0}:
             raise ValueError(f"Outcome must be -1, 0, or +1, got {outcome}")
 
+        if not -1.0 <= reward <= 1.0:
+            raise ValueError(f"Reward must be in [-1, 1], got {reward}")
+
         self.trajectory.outcome = outcome
+        self.trajectory.reward = reward
+        self.trajectory.reward_breakdown = reward_breakdown
+
         return self.trajectory
 
     @override

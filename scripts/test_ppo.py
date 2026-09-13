@@ -11,6 +11,7 @@ from ai_cif.model.config import ModelConfig
 from ai_cif.model.model import BattleModel
 from ai_cif.training.combat_handler import TrainingCombatHandler
 from ai_cif.training.ppo import PPOConfig, ppo_update
+from ai_cif.training.rewards import breakdown_for
 from ai_cif.training.trajectory import Trajectory
 from ai_cif.vectorization.tensorizer import (
     CANT_REASON_VOCAB_SIZE,
@@ -163,8 +164,9 @@ async def main() -> None:
                 raise RuntimeError("Neural client lost its username")
 
             outcome = outcome_for(result, neural_client.username)
+            reward = breakdown_for(result, outcome)
 
-            trajectory = training_handler.finish_battle(outcome)
+            trajectory = training_handler.finish_battle(outcome, reward)
 
             if not trajectory.decisions:
                 raise RuntimeError("Collected a trajectory with no decisions")

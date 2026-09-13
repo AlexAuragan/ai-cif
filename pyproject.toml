@@ -8,6 +8,7 @@ dependencies = [
     "showdown-sdk",
     "torch",
     "torchvision",
+    "wandb>=0.30.0",
 ]
 
 [tool.uv.sources]
