@@ -62,14 +62,11 @@ class TrainingCombatHandler(NeuralCombatHandler):
 
         if logits.shape != (1, 10):
             raise RuntimeError(
-                "Expected policy logits shape (1, 10), "
-                f"got {tuple(logits.shape)}"
+                f"Expected policy logits shape (1, 10), got {tuple(logits.shape)}"
             )
 
         if value.shape != (1,):
-            raise RuntimeError(
-                f"Expected value shape (1,), got {tuple(value.shape)}"
-            )
+            raise RuntimeError(f"Expected value shape (1,), got {tuple(value.shape)}")
 
         legal_mask = batch.action_mask[0]
         legal_indices = torch.where(legal_mask)[0]

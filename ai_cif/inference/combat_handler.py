@@ -20,11 +20,12 @@ class NeuralCombatHandler(BaseCombatHandler):
         tensorizer: BattleTensorizer,
         *,
         device: str | torch.device = "cpu",
+        verbose: bool = False,
     ) -> None:
         self.device = torch.device(device)
         self.model = model.to(self.device)
         self.tensorizer = tensorizer
-
+        self.verbose = verbose
         self.model.eval()
 
     @override
@@ -49,14 +50,53 @@ class NeuralCombatHandler(BaseCombatHandler):
             raise RuntimeError("Model received a state with no legal actions")
 
         scores = logits[0, legal_indices]
+        probabilities = torch.softmax(scores, dim=0)
 
         ranking = torch.argsort(scores, descending=True)
 
         ranked_indices = legal_indices[ranking]
 
-        return [
-            self._decode_action(int(index.item())) for index in ranked_indices
-        ]
+        if self.verbose:
+            print(f"\nTurn {battle_state.turn} action probabilities:")
+
+            for index, probability in zip(
+                legal_indices.tolist(), probabilities.tolist(), strict=True
+            ):
+                if index < 4:
+                    move_index = index
+
+                    if move_index < len(battle_state.available_moves):
+                        name = battle_state.available_moves[move_index].name
+                    else:
+                        name = f"move {move_index + 1}"
+
+                    label = f"MOVE   {name}"
+
+                else:
+                    party_index = index - 4
+
+                    if party_index < len(battle_state.team):
+                        pokemon = battle_state.team[party_index]
+                        label = f"SWITCH {pokemon.id}"
+                    else:
+                        label = f"SWITCH slot {party_index + 1}"
+
+                print(
+                    f"  {label:<30} "
+                    f"{probability * 100:6.2f}% "
+                    f"(logit={logits[0, index].item():.4f})"
+                )
+
+            selected_index = int(ranked_indices[0].item())
+
+            if selected_index < 4:
+                selected_name = battle_state.available_moves[selected_index].name
+                print(f"Selected: MOVE {selected_name}")
+            else:
+                pokemon = battle_state.team[selected_index - 4]
+                print(f"Selected: SWITCH {pokemon.id}")
+
+        return [self._decode_action(int(index.item())) for index in ranked_indices]
 
     @staticmethod
     def _decode_action(index: int) -> Action:

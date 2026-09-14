@@ -115,9 +115,7 @@ def _enemy_hp_fraction(result: BattleResult) -> float:
 
 
 def breakdown_for(
-    result: BattleResult,
-    outcome: float,
-    config: RewardConfig = DEFAULT_REWARD_CONFIG,
+    result: BattleResult, outcome: float, config: RewardConfig = DEFAULT_REWARD_CONFIG
 ) -> RewardBreakdown:
     own_hp_fraction = _own_hp_fraction(result)
     enemy_hp_fraction = _enemy_hp_fraction(result)

@@ -283,9 +283,7 @@ def _consume_hp_event(
             hp_delta=hp_delta,
             source_type=event.effect_source_type,
             crit=event.crit if hp_kind == "damage" else None,
-            effectiveness=(
-                event.effectiveness if hp_kind == "damage" else None
-            ),
+            effectiveness=(event.effectiveness if hp_kind == "damage" else None),
         )
     )
 

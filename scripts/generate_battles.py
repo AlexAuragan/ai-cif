@@ -108,14 +108,10 @@ class RecordingRandomHandler(RandomMoveCombatHandler):
     def records_since(self, mark: int) -> list[DecisionRecord]:
         return self.records[mark:]
 
-    def select_top_actions(
-        self, battle_state: BattleState
-    ) -> list[tuple[str, int]]:
+    def select_top_actions(self, battle_state: BattleState) -> list[tuple[str, int]]:
         features = battle_to_features(battle_state)
 
-        vector = vectorize_battle_features(
-            features, config=self.vectorizer_config
-        )
+        vector = vectorize_battle_features(features, config=self.vectorizer_config)
 
         tactical = build_simplified_history(features.history)
         recent_tactical = tail_simplified_history(
@@ -127,9 +123,7 @@ class RecordingRandomHandler(RandomMoveCombatHandler):
         if oldest_recent_turn is None:
             tactical_turn_span = 0
         else:
-            tactical_turn_span = max(
-                0, features.field.turn - oldest_recent_turn + 1
-            )
+            tactical_turn_span = max(0, features.field.turn - oldest_recent_turn + 1)
 
         ranked_actions = super().select_top_actions(battle_state)
 
@@ -171,9 +165,7 @@ async def run_battle(
     fmt: str,
     team_generator: SampleTeamGenerator | None,
 ) -> None:
-    await asyncio.gather(
-        client_1.ensure_connected(), client_2.ensure_connected()
-    )
+    await asyncio.gather(client_1.ensure_connected(), client_2.ensure_connected())
 
     if client_1.username is None or client_2.username is None:
         raise RuntimeError("Both clients must be logged in before starting")
@@ -211,9 +203,7 @@ def append_records(
     with output.open("a", encoding="utf-8") as file:
         for record in records:
             json.dump(
-                record.to_json(battle=battle, fmt=fmt),
-                file,
-                separators=(",", ":"),
+                record.to_json(battle=battle, fmt=fmt), file, separators=(",", ":")
             )
             file.write("\n")
 
@@ -235,14 +225,11 @@ def _print_summary(records: list[DecisionRecord]) -> None:
     ]
 
     tactical_per_turn = [
-        record.tactical_history_length / max(record.turn, 1)
-        for record in sample
+        record.tactical_history_length / max(record.turn, 1) for record in sample
     ]
 
     spans = [
-        record.tactical_turn_span
-        for record in sample
-        if record.tactical_turn_span > 0
+        record.tactical_turn_span for record in sample if record.tactical_turn_span > 0
     ]
 
     compression = [
@@ -351,23 +338,17 @@ async def generate(
         )
 
         for battle_number in progress:
-            await run_battle(
-                client_1, client_2, fmt=fmt, team_generator=team_generator
-            )
+            await run_battle(client_1, client_2, fmt=fmt, team_generator=team_generator)
 
     finally:
-        await asyncio.gather(
-            client_1.close(), client_2.close(), return_exceptions=True
-        )
+        await asyncio.gather(client_1.close(), client_2.close(), return_exceptions=True)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
-        "--url",
-        default=DEFAULT_WEBSOCKET_URL,
-        help="Pokémon Showdown websocket URL",
+        "--url", default=DEFAULT_WEBSOCKET_URL, help="Pokémon Showdown websocket URL"
     )
     parser.add_argument(
         "--format",
@@ -397,10 +378,7 @@ def parse_args() -> argparse.Namespace:
         help="JSONL output path",
     )
     parser.add_argument(
-        "--switch-chance",
-        type=float,
-        default=0.1,
-        help="Random bot switch probability",
+        "--switch-chance", type=float, default=0.1, help="Random bot switch probability"
     )
     parser.add_argument(
         "--team-seed",

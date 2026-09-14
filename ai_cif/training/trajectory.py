@@ -27,9 +27,7 @@ class Trajectory:
 
 
 ## Trajectories functions
-def summarize_trajectories(
-    trajectories: list[Trajectory],
-) -> tuple[int, int, int, int]:
+def summarize_trajectories(trajectories: list[Trajectory]) -> tuple[int, int, int, int]:
     wins = 0
     losses = 0
     ties = 0
