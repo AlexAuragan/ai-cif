@@ -6,10 +6,10 @@ from torch import math
 
 @dataclass(frozen=True)
 class RewardConfig:
-    outcome_weight: float
-    own_hp_weight: float
-    enemy_hp_weight: float
-    speed_weight: float
+    outcome_weight: float  # Win / loose
+    own_hp_weight: float  # % hp left
+    enemy_hp_weight: float  # % hp left
+    speed_weight: float  # nb of turn
     speed_scale: float
 
     def __post_init__(self) -> None:

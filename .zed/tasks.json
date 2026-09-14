@@ -7,4 +7,8 @@
     "command": "uv run ruff check --fix && uv run ruff format",
     "save": "all"
   },
+  {
+      "label": "Full eval",
+      "command": "PYTHONPATH=. uv run scripts/eval.py --format gen1randombattle --battles 1000 --workers 4 --worker-torch-threads 4"
+  }
 ]

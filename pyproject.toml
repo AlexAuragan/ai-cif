@@ -8,6 +8,7 @@ dependencies = [
     "showdown-sdk",
     "torch",
     "torchvision",
+    "tqdm>=4.70.1",
     "wandb>=0.30.0",
 ]
 

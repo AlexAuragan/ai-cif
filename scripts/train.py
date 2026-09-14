@@ -11,12 +11,10 @@ from time import perf_counter
 import torch
 from showdown_sdk.classes.client import Client
 from showdown_sdk.classes.combat_handler import RandomMoveCombatHandler
-from showdown_sdk.classes.dt import BattleResult
 from showdown_sdk.exceptions import BattleLifecycleError
-from showdown_sdk.models.sdk import (
-    SampleTeamGenerator,
-    TeamSet,
-    print_reproduction_teams,
+from showdown_sdk.models.sdk import SampleTeamGenerator
+from showdown_sdk.models.sdk.team_generators.team_generator import (
+    BaseTeamGenerator,
 )
 
 import wandb
@@ -24,9 +22,14 @@ from ai_cif.inference.combat_handler import NeuralCombatHandler
 from ai_cif.model.config import ModelConfig
 from ai_cif.model.model import BattleModel
 from ai_cif.training.combat_handler import TrainingCombatHandler
-from ai_cif.training.ppo import PPOConfig, PPOMetrics, ppo_update
+from ai_cif.training.configs import RunningConfig, TrainingConfig
+from ai_cif.training.ppo import PPOConfig, ppo_update
 from ai_cif.training.rewards import RewardConfig, breakdown_for
-from ai_cif.training.trajectory import Trajectory
+from ai_cif.training.trajectory import (
+    Trajectory,
+    mean_trajectory_reward,
+    summarize_trajectories,
+)
 from ai_cif.vectorization.tensorizer import (
     CANT_REASON_VOCAB_SIZE,
     FIELD_NUMERIC_DIM,
@@ -38,15 +41,50 @@ from ai_cif.vectorization.tensorizer import (
     WEATHER_VOCAB_SIZE,
     BattleTensorizer,
 )
+from scripts.utils.battles import outcome_for, run_battle
+from scripts.utils.metrics import print_initial_metrics, print_metrics
+from scripts.utils.model import save_checkpoint, snapshot_model
+from scripts.utils.multithreading import split_battles, worker_initializer
 
 DEFAULT_WEBSOCKET_URL = "ws://127.0.0.1:8000/showdown/websocket"
 
 REWARD_CONFIG = RewardConfig(
-    outcome_weight=0,
+    outcome_weight=0.5,
     own_hp_weight=0.5,
-    enemy_hp_weight=0.5,
+    enemy_hp_weight=0.0,
     speed_weight=0.0,
     speed_scale=40.0,
+)
+
+
+PPO_CONFIG = PPOConfig(
+    learning_rate=3e-4,
+    clip_epsilon=0.2,
+    value_coef=0.5,
+    entropy_coef=0.01,
+    max_grad_norm=0.5,
+    epochs=4,
+    minibatch_size=256,
+    kl_target=0.02,
+    kl_ratio_threshold=None,
+)
+
+TRAINING_CONFIG = TrainingConfig(
+    iterations=500,
+    rollout_battles=100,
+    eval_battles=200,
+    eval_interval=10,
+    team_seed=42,
+)
+
+RUNNING_CONFIG = RunningConfig(
+    url=DEFAULT_WEBSOCKET_URL,
+    format="gen1randombattle",
+    workers=4,
+    threads=4,
+    checkpoint_dir=Path("checkpoints"),
+    wandb_project="ai-cif",
+    wandb_entity=None,
 )
 
 
@@ -78,127 +116,14 @@ def create_model(device: torch.device) -> tuple[BattleModel, BattleTensorizer]:
     return model, tensorizer
 
 
-def snapshot_model(model: BattleModel) -> dict[str, torch.Tensor]:
-    """Create a stable CPU snapshot that can be sent to rollout processes."""
-    return {
-        name: tensor.detach().cpu().clone()
-        for name, tensor in model.state_dict().items()
-    }
-
-
-def split_battles(battles: int, worker_count: int) -> list[int]:
-    base = battles // worker_count
-    remainder = battles % worker_count
-
-    return [
-        base + (1 if index < remainder else 0) for index in range(worker_count)
-    ]
-
-
-async def run_battle(
-    client_1: Client,
-    client_2: Client,
-    *,
-    fmt: str,
-    team_generator: SampleTeamGenerator | None,
-) -> tuple[BattleResult, BattleResult]:
-    await asyncio.gather(
-        client_1.ensure_connected(), client_2.ensure_connected()
-    )
-
-    if client_1.username is None:
-        raise RuntimeError("Client 1 is not logged in")
-
-    if client_2.username is None:
-        raise RuntimeError("Client 2 is not logged in")
-
-    team_1: TeamSet | None = None
-    team_2: TeamSet | None = None
-
-    if team_generator is not None:
-        team_1 = await team_generator.generate(
-            fmt, lambda team: client_1.validate_team(fmt, team)
-        )
-        team_2 = await team_generator.generate(
-            fmt, lambda team: client_2.validate_team(fmt, team)
-        )
-
-    await client_1.challenge(client_2.username, fmt, timeout=60, team=team_1)
-    await client_2.accept_challenge(client_1.username, team=team_2)
-
-    battle_waiter_1: asyncio.Task[BattleResult] | None = None
-    battle_waiter_2: asyncio.Task[BattleResult] | None = None
-
-    try:
-        await asyncio.gather(
-            client_1.battle_manager.room_ready.wait(),
-            client_2.battle_manager.room_ready.wait(),
-        )
-
-        battle_waiter_1 = asyncio.create_task(
-            client_1.wait_for_battle_end(timeout=300)
-        )
-        battle_waiter_2 = asyncio.create_task(
-            client_2.wait_for_battle_end(timeout=300)
-        )
-
-        result_1, result_2 = await asyncio.gather(
-            battle_waiter_1, battle_waiter_2
-        )
-
-        return result_1, result_2
-
-    except BaseException as error:
-        waiters = [
-            waiter
-            for waiter in (battle_waiter_1, battle_waiter_2)
-            if waiter is not None
-        ]
-
-        for waiter in waiters:
-            if not waiter.done():
-                waiter.cancel()
-
-        if waiters:
-            await asyncio.gather(*waiters, return_exceptions=True)
-
-        client_1.battle_manager.abandon_battle(error)
-        client_2.battle_manager.abandon_battle(error)
-
-        if team_generator is not None:
-            print_reproduction_teams(team_1, team_2)
-        else:
-            print("\n========== TEAM 1 ==========")
-            for pokemon in client_1.battle_manager.battle_state.team:
-                print(pokemon)
-
-            print("\n========== TEAM 2 ==========")
-
-            for pokemon in client_2.battle_manager.battle_state.team:
-                print(pokemon)
-
-            print("============================\n")
-
-        raise
-
-
-def outcome_for(result: BattleResult, username: str) -> float:
-    if result.winner is None:
-        return 0.0
-
-    if result.winner == username:
-        return 1.0
-
-    return -1.0
-
-
 async def collect_trajectories(
     *,
     neural_client: Client,
     random_client: Client,
     handler: TrainingCombatHandler,
     fmt: str,
-    team_generator: SampleTeamGenerator | None,
+    team_generator_1: BaseTeamGenerator | None,
+    team_generator_2: BaseTeamGenerator | None,
     battles: int,
 ) -> list[Trajectory]:
     if neural_client.username is None:
@@ -216,7 +141,8 @@ async def collect_trajectories(
                 neural_client,
                 random_client,
                 fmt=fmt,
-                team_generator=team_generator,
+                team_generator_1=team_generator_1,
+                team_generator_2=team_generator_2,
             )
         except BattleLifecycleError as error:
             print(f"Discarding failed battle and retrying: {error!r}")
@@ -253,7 +179,8 @@ async def evaluate(
     random_client: Client,
     handler: NeuralCombatHandler,
     fmt: str,
-    team_generator: SampleTeamGenerator | None,
+    team_generator_1: BaseTeamGenerator | None,
+    team_generator_2: BaseTeamGenerator | None,
     battles: int,
 ) -> tuple[int, int, int]:
     if neural_client.username is None:
@@ -267,7 +194,11 @@ async def evaluate(
 
     for _ in range(battles):
         result, _ = await run_battle(
-            neural_client, random_client, fmt=fmt, team_generator=team_generator
+            neural_client,
+            random_client,
+            fmt=fmt,
+            team_generator_1=team_generator_1,
+            team_generator_2=team_generator_2,
         )
 
         outcome = outcome_for(result, neural_client.username)
@@ -280,14 +211,6 @@ async def evaluate(
             ties += 1
 
     return wins, losses, ties
-
-
-def _worker_initializer(torch_threads: int) -> None:
-    # Every rollout process already gives us CPU parallelism. Letting every
-    # process also create a large PyTorch thread pool usually oversubscribes
-    # the machine and hurts throughput for this small model.
-    torch.set_num_threads(torch_threads)
-    torch.set_num_interop_threads(1)
 
 
 async def _rollout_worker_async(
@@ -317,11 +240,15 @@ async def _rollout_worker_async(
     neural_client.log_manager.disable()
     random_client.log_manager.disable()
 
-    team_generator: SampleTeamGenerator | None = None
+    team_generator_1: SampleTeamGenerator | None = None
+    team_generator_2: SampleTeamGenerator | None = None
 
     if "randombattle" not in fmt:
-        team_generator = SampleTeamGenerator(
+        team_generator_1 = SampleTeamGenerator(
             team_seed + phase_id * 10_000 + worker_index
+        )
+        team_generator_2 = SampleTeamGenerator(
+            team_seed + phase_id * 10_000 + worker_index + 1
         )
 
     neural_name = f"A{phase_id}N{worker_index}"
@@ -339,7 +266,8 @@ async def _rollout_worker_async(
             random_client=random_client,
             handler=handler,
             fmt=fmt,
-            team_generator=team_generator,
+            team_generator_1=team_generator_1,
+            team_generator_2=team_generator_2,
             battles=battles,
         )
 
@@ -405,11 +333,15 @@ async def _evaluation_worker_async(
     neural_client.log_manager.disable()
     random_client.log_manager.disable()
 
-    team_generator: SampleTeamGenerator | None = None
+    team_generator_1: SampleTeamGenerator | None = None
+    team_generator_2: SampleTeamGenerator | None = None
 
     if "randombattle" not in fmt:
-        team_generator = SampleTeamGenerator(
+        team_generator_1 = SampleTeamGenerator(
             team_seed + phase_id * 10_000 + worker_index
+        )
+        team_generator_2 = SampleTeamGenerator(
+            team_seed + phase_id * 10_000 + worker_index + 1
         )
 
     neural_name = f"A{phase_id}N{worker_index}"
@@ -427,7 +359,8 @@ async def _evaluation_worker_async(
             random_client=random_client,
             handler=handler,
             fmt=fmt,
-            team_generator=team_generator,
+            team_generator_1=team_generator_1,
+            team_generator_2=team_generator_2,
             battles=battles,
         )
 
@@ -575,83 +508,13 @@ async def evaluate_multiprocess(
     return wins, losses, ties
 
 
-def mean_trajectory_reward(trajectories: list[Trajectory]) -> float:
-    if not trajectories:
-        raise ValueError("Cannot summarize empty trajectories")
-
-    rewards: list[float] = []
-
-    for trajectory in trajectories:
-        if trajectory.reward is None:
-            raise ValueError("All trajectories must have a reward")
-
-        rewards.append(float(trajectory.reward))
-
-    return sum(rewards) / len(rewards)
-
-
-def summarize_training(
-    trajectories: list[Trajectory],
-) -> tuple[int, int, int, int]:
-    wins = 0
-    losses = 0
-    ties = 0
-    decisions = 0
-
-    for trajectory in trajectories:
-        decisions += len(trajectory.decisions)
-
-        if trajectory.outcome == 1.0:
-            wins += 1
-        elif trajectory.outcome == -1.0:
-            losses += 1
-        else:
-            ties += 1
-
-    return wins, losses, ties, decisions
-
-
-def save_checkpoint(
-    *,
-    path: Path,
-    model: BattleModel,
-    optimizer: torch.optim.Optimizer,
-    iteration: int,
-) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    torch.save(
-        {
-            "iteration": iteration,
-            "model": model.state_dict(),
-            "optimizer": optimizer.state_dict(),
-        },
-        path,
-    )
-
-
-def print_metrics(metrics: PPOMetrics) -> None:
-    print(
-        f"policy={metrics.policy_loss:+.4f} "
-        f"value={metrics.value_loss:.4f} "
-        f"entropy={metrics.entropy:.4f} "
-        f"kl={metrics.approx_kl:.5f} "
-        f"clip={metrics.clip_fraction:.3f}"
-    )
-
-    print(
-        f"mean_value={metrics.mean_value:+.3f} "
-        f"mean_return={metrics.mean_return:+.3f}"
-    )
-
-
 async def train(args: argparse.Namespace) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     print(f"Training device: {device}")
     print("Rollout device: cpu")
-    print(f"Rollout processes: {args.workers}")
-    print(f"PyTorch threads per rollout process: {args.worker_torch_threads}")
+    print(f"Rollout processes: {RUNNING_CONFIG.workers}")
+    print(f"PyTorch threads per rollout process: {RUNNING_CONFIG.threads}")
 
     model, _ = create_model(device)
     model.eval()
@@ -659,47 +522,26 @@ async def train(args: argparse.Namespace) -> None:
     parameter_count = sum(parameter.numel() for parameter in model.parameters())
 
     print(f"Model parameters: {parameter_count:,}")
-
-    ppo_config = PPOConfig(
-        learning_rate=args.learning_rate,
-        clip_epsilon=0.2,
-        value_coef=0.5,
-        entropy_coef=0.01,
-        max_grad_norm=0.5,
-        epochs=4,
-        minibatch_size=256,
-    )
-
     optimizer = torch.optim.Adam(
-        model.parameters(), lr=ppo_config.learning_rate
+        model.parameters(), lr=PPO_CONFIG.learning_rate
     )
 
     wandb_run = None
 
     if not args.no_wandb:
+        running_config = asdict(RUNNING_CONFIG)
+        running_config["checkpoint_dir"] = str(running_config["checkpoint_dir"])
         wandb_run = wandb.init(
-            project=args.wandb_project,
-            entity=args.wandb_entity,
+            project=RUNNING_CONFIG.wandb_project,
+            entity=RUNNING_CONFIG.wandb_entity,
             name=args.wandb_name,
             config={
-                "format": args.fmt,
-                "iterations": args.iterations,
-                "rollout_battles": (args.rollout_battles),
-                "eval_battles": (args.eval_battles),
-                "eval_interval": (args.eval_interval),
-                "learning_rate": (args.learning_rate),
-                "workers": args.workers,
-                "worker_torch_threads": (args.worker_torch_threads),
-                "team_seed": args.team_seed,
-                "checkpoint_dir": str(args.checkpoint_dir),
+                "running": running_config,
+                "training": asdict(TRAINING_CONFIG),
+                "ppo": asdict(PPO_CONFIG),
+                "reward": asdict(REWARD_CONFIG),
                 "training_device": str(device),
                 "parameter_count": parameter_count,
-                "ppo_clip_epsilon": (ppo_config.clip_epsilon),
-                "ppo_value_coef": (ppo_config.value_coef),
-                "ppo_entropy_coef": (ppo_config.entropy_coef),
-                "ppo_epochs": (ppo_config.epochs),
-                "ppo_minibatch_size": (ppo_config.minibatch_size),
-                "reward_config": asdict(REWARD_CONFIG),
             },
         )
 
@@ -711,10 +553,10 @@ async def train(args: argparse.Namespace) -> None:
 
     try:
         pool = ProcessPoolExecutor(
-            max_workers=args.workers,
+            max_workers=RUNNING_CONFIG.workers,
             mp_context=context,
-            initializer=_worker_initializer,
-            initargs=(args.worker_torch_threads,),
+            initializer=worker_initializer,
+            initargs=(RUNNING_CONFIG.threads,),
         )
 
         with tempfile.TemporaryDirectory(
@@ -732,33 +574,23 @@ async def train(args: argparse.Namespace) -> None:
             wins, losses, ties = await evaluate_multiprocess(
                 pool=pool,
                 model=model,
-                url=args.url,
-                fmt=args.fmt,
-                team_seed=args.team_seed,
-                battles=args.eval_battles,
-                worker_count=args.workers,
+                url=RUNNING_CONFIG.url,
+                fmt=RUNNING_CONFIG.format,
+                team_seed=TRAINING_CONFIG.team_seed,
+                battles=TRAINING_CONFIG.eval_battles,
+                worker_count=RUNNING_CONFIG.workers,
                 phase_id=phase_id,
             )
 
             evaluation_seconds = perf_counter() - evaluation_start
 
-            initial_win_rate = wins / args.eval_battles
+            initial_win_rate = wins / TRAINING_CONFIG.eval_battles
 
             best_eval_win_rate = initial_win_rate
 
-            print(
-                f"wins={wins} "
-                f"losses={losses} "
-                f"ties={ties} "
-                f"win_rate="
-                f"{initial_win_rate:.1%}"
-            )
-
-            print(
-                f"evaluation_time="
-                f"{evaluation_seconds:.2f}s "
-                f"battles/s="
-                f"{args.eval_battles / evaluation_seconds:.2f}"
+            eval_battles = TRAINING_CONFIG.eval_battles
+            print_initial_metrics(
+                wins, losses, ties, eval_battles, evaluation_seconds
             )
 
             if wandb_run is not None:
@@ -771,13 +603,13 @@ async def train(args: argparse.Namespace) -> None:
                         "eval/best_win_rate": (best_eval_win_rate),
                         "eval/seconds": (evaluation_seconds),
                         "eval/battles_per_second": (
-                            args.eval_battles / evaluation_seconds
+                            TRAINING_CONFIG.eval_battles / evaluation_seconds
                         ),
                     },
                     step=0,
                 )
 
-            for iteration in range(1, args.iterations + 1):
+            for iteration in range(1, TRAINING_CONFIG.iterations + 1):
                 phase_id += 1
 
                 rollout_start = perf_counter()
@@ -785,18 +617,18 @@ async def train(args: argparse.Namespace) -> None:
                 trajectories = await collect_trajectories_multiprocess(
                     pool=pool,
                     model=model,
-                    url=args.url,
-                    fmt=args.fmt,
-                    team_seed=args.team_seed,
-                    battles=(args.rollout_battles),
-                    worker_count=(args.workers),
+                    url=RUNNING_CONFIG.url,
+                    fmt=RUNNING_CONFIG.format,
+                    team_seed=TRAINING_CONFIG.team_seed,
+                    battles=(TRAINING_CONFIG.rollout_battles),
+                    worker_count=(RUNNING_CONFIG.workers),
                     phase_id=phase_id,
                     temporary_directory=(temporary_directory),
                 )
 
                 rollout_seconds = perf_counter() - rollout_start
 
-                (wins, losses, ties, decisions) = summarize_training(
+                (wins, losses, ties, decisions) = summarize_trajectories(
                     trajectories
                 )
 
@@ -808,7 +640,7 @@ async def train(args: argparse.Namespace) -> None:
                     model=model,
                     optimizer=optimizer,
                     trajectories=trajectories,
-                    config=ppo_config,
+                    config=PPO_CONFIG,
                     device=device,
                 )
 
@@ -917,7 +749,7 @@ async def train(args: argparse.Namespace) -> None:
                     / battle_count,
                 }
 
-                if iteration % args.eval_interval == 0:
+                if iteration % TRAINING_CONFIG.eval_interval == 0:
                     phase_id += 1
 
                     evaluation_start = perf_counter()
@@ -929,17 +761,17 @@ async def train(args: argparse.Namespace) -> None:
                     ) = await evaluate_multiprocess(
                         pool=pool,
                         model=model,
-                        url=args.url,
-                        fmt=args.fmt,
-                        team_seed=(args.team_seed),
-                        battles=(args.eval_battles),
-                        worker_count=(args.workers),
+                        url=RUNNING_CONFIG.url,
+                        fmt=RUNNING_CONFIG.format,
+                        team_seed=(TRAINING_CONFIG.team_seed),
+                        battles=(TRAINING_CONFIG.eval_battles),
+                        worker_count=(RUNNING_CONFIG.workers),
                         phase_id=phase_id,
                     )
 
                     evaluation_seconds = perf_counter() - evaluation_start
 
-                    win_rate = eval_wins / args.eval_battles
+                    win_rate = eval_wins / TRAINING_CONFIG.eval_battles
 
                     best_eval_win_rate = max(best_eval_win_rate, win_rate)
 
@@ -956,7 +788,7 @@ async def train(args: argparse.Namespace) -> None:
                         f"eval_time="
                         f"{evaluation_seconds:.2f}s "
                         f"battles/s="
-                        f"{args.eval_battles / evaluation_seconds:.2f}"
+                        f"{TRAINING_CONFIG.eval_battles / evaluation_seconds:.2f}"
                     )
 
                     log_data.update(
@@ -968,13 +800,14 @@ async def train(args: argparse.Namespace) -> None:
                             "eval/best_win_rate": (best_eval_win_rate),
                             "eval/seconds": (evaluation_seconds),
                             "eval/battles_per_second": (
-                                args.eval_battles / evaluation_seconds
+                                TRAINING_CONFIG.eval_battles
+                                / evaluation_seconds
                             ),
                         }
                     )
 
                     checkpoint = (
-                        args.checkpoint_dir
+                        RUNNING_CONFIG.checkpoint_dir
                         / args.wandb_name
                         / (f"iteration_{iteration:05d}.pt")
                     )
@@ -988,7 +821,9 @@ async def train(args: argparse.Namespace) -> None:
 
                     save_checkpoint(
                         path=(
-                            args.checkpoint_dir / args.wandb_name / "latest.pt"
+                            RUNNING_CONFIG.checkpoint_dir
+                            / args.wandb_name
+                            / "latest.pt"
                         ),
                         model=model,
                         optimizer=optimizer,
@@ -996,12 +831,6 @@ async def train(args: argparse.Namespace) -> None:
                     )
 
                 if wandb_run is not None:
-                    #
-                    # Exactly one log call for each
-                    # training iteration. Evaluation
-                    # values are included when this
-                    # was an evaluation iteration.
-                    #
                     wandb_run.log(log_data, step=iteration)
 
     except BaseException:
@@ -1022,61 +851,16 @@ async def train(args: argparse.Namespace) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--url", default=DEFAULT_WEBSOCKET_URL)
-
-    parser.add_argument("--format", dest="fmt", default="gen1randombattle")
-
-    parser.add_argument(
-        "--workers",
-        type=int,
-        default=4,
-        help=("Number of independent rollout/evaluation processes"),
-    )
-
-    parser.add_argument(
-        "--worker-torch-threads",
-        type=int,
-        default=1,
-        help=("PyTorch intra-op threads used by each rollout process"),
-    )
-
-    parser.add_argument("--iterations", type=int, default=100)
-
-    parser.add_argument("--rollout-battles", type=int, default=32)
-
-    parser.add_argument("--eval-battles", type=int, default=100)
-
-    parser.add_argument("--eval-interval", type=int, default=10)
-
-    parser.add_argument("--learning-rate", type=float, default=3e-4)
-
-    parser.add_argument("--team-seed", type=int, default=42)
-
-    parser.add_argument(
-        "--checkpoint-dir", type=Path, default=Path("checkpoints")
-    )
-
-    parser.add_argument("--wandb-project", default="ai-cif")
-
-    parser.add_argument("--wandb-entity", default=None)
-
     parser.add_argument("--wandb-name", default=None)
 
     parser.add_argument("--no-wandb", action="store_true")
 
     args = parser.parse_args()
 
-    if args.workers < 1:
-        parser.error("--workers must be at least 1")
-
-    if args.worker_torch_threads < 1:
-        parser.error("--worker-torch-threads must be at least 1")
-
-    if args.rollout_battles < 1:
-        parser.error("--rollout-battles must be at least 1")
-
-    if args.eval_battles < 1:
-        parser.error("--eval-battles must be at least 1")
+    if args.wandb_name is None and not args.no_wandb:
+        raise ValueError(
+            "--wandb-name must be set unless --no-wandb flag is active"
+        )
 
     return args
 

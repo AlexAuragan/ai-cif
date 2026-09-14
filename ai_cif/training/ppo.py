@@ -19,6 +19,10 @@ class PPOConfig:
     epochs: int = 4
     minibatch_size: int = 256
 
+    # Stop the epochs if the kl > kl_target * kl_ratio_threshold
+    kl_target: float = 0.2
+    kl_ratio_threshold: float | None = None
+
 
 @dataclass(frozen=True)
 class PPOMetrics:
@@ -28,7 +32,10 @@ class PPOMetrics:
     total_loss: float
 
     approx_kl: float
+    max_approx_kl: float
     clip_fraction: float
+
+    early_stop: bool
 
     mean_value: float
     mean_return: float
@@ -102,6 +109,7 @@ def ppo_update(
 
     model.train()
 
+    early_stop = False
     for _ in range(config.epochs):
         permutation = torch.randperm(count)
 
@@ -130,6 +138,16 @@ def ppo_update(
             ratio = torch.exp(log_ratio)
 
             approx_kl = ((ratio - 1.0) - log_ratio).mean()
+            kl_value = float(approx_kl.item())
+
+            approx_kls.append(kl_value)
+
+            if (
+                config.kl_ratio_threshold is not None
+                and kl_value > config.kl_target * config.kl_ratio_threshold
+            ):
+                early_stop = True
+                break
 
             clip_fraction = (
                 ((ratio - 1.0).abs() > config.clip_epsilon).float().mean()
@@ -169,6 +187,8 @@ def ppo_update(
             total_losses.append(float(total_loss.item()))
             approx_kls.append(float(approx_kl.item()))
             clip_fractions.append(float(clip_fraction.item()))
+        if early_stop:
+            break
 
     model.eval()
 
@@ -178,6 +198,8 @@ def ppo_update(
         entropy=sum(entropies) / len(entropies),
         total_loss=sum(total_losses) / len(total_losses),
         approx_kl=sum(approx_kls) / len(approx_kls),
+        max_approx_kl=max(approx_kls),
+        early_stop=early_stop,
         clip_fraction=sum(clip_fractions) / len(clip_fractions),
         mean_value=float(old_values.mean().item()),
         mean_return=float(returns.mean().item()),

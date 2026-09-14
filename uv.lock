@@ -16,6 +16,7 @@ dependencies = [
     { name = "torch", version = "2.14.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform != 'darwin'" },
     { name = "torchvision", version = "0.29.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'darwin'" },
     { name = "torchvision", version = "0.29.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform != 'darwin'" },
+    { name = "tqdm" },
     { name = "wandb" },
 ]
 
@@ -31,6 +32,7 @@ requires-dist = [
     { name = "showdown-sdk", git = "https://github.com/AlexAuragan/Showdown-SDK.git" },
     { name = "torch", index = "https://download.pytorch.org/whl/cpu" },
     { name = "torchvision", index = "https://download.pytorch.org/whl/cpu" },
+    { name = "tqdm", specifier = ">=4.70.1" },
     { name = "wandb", specifier = ">=0.30.0" },
 ]
 
@@ -913,8 +915,8 @@ wheels = [
 
 [[package]]
 name = "showdown-sdk"
-version = "0.2.3"
-source = { git = "https://github.com/AlexAuragan/Showdown-SDK.git#eb68defbf49d7a643a155166c3eacf2ae83fd62f" }
+version = "0.2.4"
+source = { git = "https://github.com/AlexAuragan/Showdown-SDK.git#28ad7cb9af77677069b6b624fc2b34722289d36b" }
 dependencies = [
     { name = "aiohttp" },
     { name = "requests" },
