@@ -19,6 +19,8 @@ flowchart LR
 | outcome-1 | 1 | 0 | 0 | 0 | 40 |
 | shapped-1| 0.8 | 0.075 | 0.075 | 0.005 | 40 |
 | mixed-1 | 0.5 | 0.25 | 0.25 | 0 | 40 |
+| skewed-own-1 | 0.5 | 0.5 | 0 | 0 | 40 |
+| skewed-enemy-1 | 0.5 | 0 | 0.5 | 0 | 40 |
 
 ## Model configs
 ### Embedding dimensions: Pokemon

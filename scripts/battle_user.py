@@ -6,7 +6,7 @@ from showdown_sdk.classes.client import Client
 from showdown_sdk.exceptions import UserNotFoundError
 
 from ai_cif.inference.combat_handler import NeuralCombatHandler
-from scripts.train import create_model
+from scripts.train import MODEL_CONFIG, TENSORIZER, create_model
 
 WEBSOCKET_URL = "ws://127.0.0.1:8000/showdown/websocket"
 
@@ -20,7 +20,7 @@ CHECKPOINT_PATH = Path("data/models/gen1randombattle/red-hp-1-150-best.pt")
 def load_bot() -> NeuralCombatHandler:
     device = torch.device("cpu")
 
-    model, tensorizer = create_model(device)
+    model = create_model(device, MODEL_CONFIG)
 
     checkpoint = torch.load(CHECKPOINT_PATH, map_location=device, weights_only=False)
 
@@ -28,7 +28,7 @@ def load_bot() -> NeuralCombatHandler:
     model.eval()
 
     return NeuralCombatHandler(
-        model=model, tensorizer=tensorizer, device=device, verbose=True
+        model=model, tensorizer=TENSORIZER, device=device, verbose=True
     )
 
 

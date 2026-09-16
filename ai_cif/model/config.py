@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 
-@dataclass(frozen=True)
+@dataclass
 class ModelConfig:
     species_count: int
     form_count: int
@@ -41,3 +41,5 @@ class ModelConfig:
     trunk_output_dim: int = 128
 
     action_count: int = 10
+
+    seed: int = 42

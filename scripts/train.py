@@ -3,6 +3,7 @@ import asyncio
 import multiprocessing
 import tempfile
 from concurrent.futures import ProcessPoolExecutor
+from copy import copy
 from dataclasses import asdict
 from functools import partial
 from pathlib import Path
@@ -47,8 +48,8 @@ from scripts.utils.multithreading import split_battles, worker_initializer
 DEFAULT_WEBSOCKET_URL = "ws://127.0.0.1:8000/showdown/websocket"
 
 REWARD_CONFIG = RewardConfig(
-    outcome_weight=0.5,
-    own_hp_weight=0.0,
+    outcome_weight=0.0,
+    own_hp_weight=0.5,
     enemy_hp_weight=0.5,
     speed_weight=0.0,
     speed_scale=40.0,
@@ -68,7 +69,7 @@ PPO_CONFIG = PPOConfig(
 )
 
 TRAINING_CONFIG = TrainingConfig(
-    iterations=500,
+    iterations=200,
     rollout_battles=100,
     eval_battles=200,
     eval_interval=10,
@@ -85,25 +86,26 @@ RUNNING_CONFIG = RunningConfig(
     wandb_entity=None,
 )
 
+TENSORIZER = BattleTensorizer(max_history=32, vocab_gen=4)
 
-def create_model(device: torch.device) -> tuple[BattleModel, BattleTensorizer]:
-    tensorizer = BattleTensorizer(max_history=32, vocab_gen=4)
+MODEL_CONFIG = ModelConfig(
+    species_count=TENSORIZER.species_vocab_size,
+    form_count=TENSORIZER.form_vocab_size,
+    move_count=TENSORIZER.move_vocab_size,
+    item_count=TENSORIZER.item_vocab_size,
+    ability_count=TENSORIZER.ability_vocab_size,
+    status_count=STATUS_VOCAB_SIZE,
+    weather_count=WEATHER_VOCAB_SIZE,
+    tactical_event_type_count=HISTORY_KIND_VOCAB_SIZE,
+    history_ref_count=HISTORY_REF_VOCAB_SIZE,
+    history_reason_count=CANT_REASON_VOCAB_SIZE,
+)
 
-    config = ModelConfig(
-        species_count=tensorizer.species_vocab_size,
-        form_count=tensorizer.form_vocab_size,
-        move_count=tensorizer.move_vocab_size,
-        item_count=tensorizer.item_vocab_size,
-        ability_count=tensorizer.ability_vocab_size,
-        status_count=STATUS_VOCAB_SIZE,
-        weather_count=WEATHER_VOCAB_SIZE,
-        tactical_event_type_count=HISTORY_KIND_VOCAB_SIZE,
-        history_ref_count=HISTORY_REF_VOCAB_SIZE,
-        history_reason_count=CANT_REASON_VOCAB_SIZE,
-    )
 
+def create_model(device: torch.device, model_config: ModelConfig) -> BattleModel:
+    torch.manual_seed(model_config.seed)
     model = BattleModel(
-        config=config,
+        config=model_config,
         pokemon_numeric_feature_count=POKEMON_NUMERIC_DIM,
         field_numeric_feature_count=FIELD_NUMERIC_DIM,
         tactical_numeric_feature_count=HISTORY_NUMERIC_DIM,
@@ -111,7 +113,7 @@ def create_model(device: torch.device) -> tuple[BattleModel, BattleTensorizer]:
 
     model.to(device)
 
-    return model, tensorizer
+    return model
 
 
 async def collect_trajectories(
@@ -123,6 +125,7 @@ async def collect_trajectories(
     team_generator_1: BaseTeamGenerator | None,
     team_generator_2: BaseTeamGenerator | None,
     battles: int,
+    reward_config: RewardConfig,
 ) -> list[Trajectory]:
     if neural_client.username is None:
         raise RuntimeError("Neural client has no username")
@@ -156,7 +159,7 @@ async def collect_trajectories(
             continue
 
         outcome = outcome_for(result, neural_client.username)
-        breakdown = breakdown_for(result, outcome, config=REWARD_CONFIG)
+        breakdown = breakdown_for(result, outcome, config=reward_config)
 
         trajectory = handler.finish_battle(outcome, breakdown)
 
@@ -218,9 +221,12 @@ async def _rollout_worker_async(
     worker_index: int,
     phase_id: int,
     output_path: str,
+    reward_config: RewardConfig,
+    model_config: ModelConfig,
+    tensorizer: BattleTensorizer,
 ) -> str:
     device = torch.device("cpu")
-    model, tensorizer = create_model(device)
+    model = create_model(device, model_config)
     model.load_state_dict(model_state)
     model.eval()
 
@@ -262,6 +268,7 @@ async def _rollout_worker_async(
             team_generator_1=team_generator_1,
             team_generator_2=team_generator_2,
             battles=battles,
+            reward_config=reward_config,
         )
 
         # Do not push thousands of small tensors through the multiprocessing
@@ -285,6 +292,9 @@ def _rollout_worker(
     worker_index: int,
     phase_id: int,
     output_path: str,
+    reward_config: RewardConfig,
+    model_config: ModelConfig,
+    tensorizer: BattleTensorizer,
 ) -> str:
     return asyncio.run(
         _rollout_worker_async(
@@ -296,6 +306,9 @@ def _rollout_worker(
             worker_index=worker_index,
             phase_id=phase_id,
             output_path=output_path,
+            reward_config=reward_config,
+            model_config=model_config,
+            tensorizer=tensorizer,
         )
     )
 
@@ -309,9 +322,11 @@ async def _evaluation_worker_async(
     battles: int,
     worker_index: int,
     phase_id: int,
+    model_config: ModelConfig,
+    tensorizer: BattleTensorizer,
 ) -> tuple[int, int, int]:
     device = torch.device("cpu")
-    model, tensorizer = create_model(device)
+    model = create_model(device, model_config)
     model.load_state_dict(model_state)
     model.eval()
 
@@ -369,6 +384,8 @@ def _evaluation_worker(
     battles: int,
     worker_index: int,
     phase_id: int,
+    model_config: ModelConfig,
+    tensorizer: BattleTensorizer,
 ) -> tuple[int, int, int]:
     return asyncio.run(
         _evaluation_worker_async(
@@ -379,6 +396,8 @@ def _evaluation_worker(
             battles=battles,
             worker_index=worker_index,
             phase_id=phase_id,
+            model_config=model_config,
+            tensorizer=tensorizer,
         )
     )
 
@@ -394,6 +413,9 @@ async def collect_trajectories_multiprocess(
     worker_count: int,
     phase_id: int,
     temporary_directory: Path,
+    reward_config: RewardConfig,
+    model_config: ModelConfig,
+    tensorizer: BattleTensorizer,
 ) -> list[Trajectory]:
     counts = split_battles(battles, worker_count)
 
@@ -423,6 +445,9 @@ async def collect_trajectories_multiprocess(
                     worker_index,
                     phase_id,
                     str(output_path),
+                    reward_config,
+                    model_config,
+                    tensorizer,
                 ),
             )
         )
@@ -461,6 +486,8 @@ async def evaluate_multiprocess(
     battles: int,
     worker_count: int,
     phase_id: int,
+    model_config: ModelConfig,
+    tensorizer: BattleTensorizer,
 ) -> tuple[int, int, int]:
     counts = split_battles(battles, worker_count)
 
@@ -479,6 +506,8 @@ async def evaluate_multiprocess(
                 count,
                 worker_index,
                 phase_id,
+                model_config,
+                tensorizer,
             ),
         )
         for worker_index, count in enumerate(counts)
@@ -494,36 +523,45 @@ async def evaluate_multiprocess(
     return wins, losses, ties
 
 
-async def train(args: argparse.Namespace) -> None:
+async def train(
+    args: argparse.Namespace,
+    ppo_config: PPOConfig,
+    training_config: TrainingConfig,
+    reward_config: RewardConfig,
+    running_config: RunningConfig,
+    model_config: ModelConfig,
+    tensorizer: BattleTensorizer,
+) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     print(f"Training device: {device}")
     print("Rollout device: cpu")
-    print(f"Rollout processes: {RUNNING_CONFIG.workers}")
-    print(f"PyTorch threads per rollout process: {RUNNING_CONFIG.threads}")
+    print(f"Rollout processes: {running_config.workers}")
+    print(f"PyTorch threads per rollout process: {running_config.threads}")
 
-    model, _ = create_model(device)
+    model = create_model(device, model_config)
     model.eval()
 
     parameter_count = sum(parameter.numel() for parameter in model.parameters())
 
     print(f"Model parameters: {parameter_count:,}")
-    optimizer = torch.optim.Adam(model.parameters(), lr=PPO_CONFIG.learning_rate)
+    optimizer = torch.optim.Adam(model.parameters(), lr=ppo_config.learning_rate)
 
     wandb_run = None
 
     if not args.no_wandb:
-        running_config = asdict(RUNNING_CONFIG)
-        running_config["checkpoint_dir"] = str(running_config["checkpoint_dir"])
+        _running_config = asdict(running_config)
+        _running_config["checkpoint_dir"] = str(_running_config["checkpoint_dir"])
         wandb_run = wandb.init(
-            project=RUNNING_CONFIG.wandb_project,
-            entity=RUNNING_CONFIG.wandb_entity,
+            project=running_config.wandb_project,
+            entity=running_config.wandb_entity,
+            group=args.wandb_group,
             name=args.wandb_name,
             config={
-                "running": running_config,
-                "training": asdict(TRAINING_CONFIG),
-                "ppo": asdict(PPO_CONFIG),
-                "reward": asdict(REWARD_CONFIG),
+                "running": _running_config,
+                "training": asdict(training_config),
+                "ppo": asdict(ppo_config),
+                "reward": asdict(reward_config),
                 "training_device": str(device),
                 "parameter_count": parameter_count,
             },
@@ -537,10 +575,10 @@ async def train(args: argparse.Namespace) -> None:
 
     try:
         pool = ProcessPoolExecutor(
-            max_workers=RUNNING_CONFIG.workers,
+            max_workers=running_config.workers,
             mp_context=context,
             initializer=worker_initializer,
-            initargs=(RUNNING_CONFIG.threads,),
+            initargs=(running_config.threads,),
         )
 
         with tempfile.TemporaryDirectory(
@@ -558,21 +596,23 @@ async def train(args: argparse.Namespace) -> None:
             wins, losses, ties = await evaluate_multiprocess(
                 pool=pool,
                 model=model,
-                url=RUNNING_CONFIG.url,
-                fmt=RUNNING_CONFIG.format,
-                team_seed=TRAINING_CONFIG.team_seed,
-                battles=TRAINING_CONFIG.eval_battles,
-                worker_count=RUNNING_CONFIG.workers,
+                url=running_config.url,
+                fmt=running_config.format,
+                team_seed=training_config.team_seed,
+                battles=training_config.eval_battles,
+                worker_count=running_config.workers,
                 phase_id=phase_id,
+                model_config=model_config,
+                tensorizer=tensorizer,
             )
 
             evaluation_seconds = perf_counter() - evaluation_start
 
-            initial_win_rate = wins / TRAINING_CONFIG.eval_battles
+            initial_win_rate = wins / training_config.eval_battles
 
             best_eval_win_rate = initial_win_rate
 
-            eval_battles = TRAINING_CONFIG.eval_battles
+            eval_battles = training_config.eval_battles
             print_initial_metrics(wins, losses, ties, eval_battles, evaluation_seconds)
 
             if wandb_run is not None:
@@ -585,13 +625,13 @@ async def train(args: argparse.Namespace) -> None:
                         "eval/best_win_rate": (best_eval_win_rate),
                         "eval/seconds": (evaluation_seconds),
                         "eval/battles_per_second": (
-                            TRAINING_CONFIG.eval_battles / evaluation_seconds
+                            training_config.eval_battles / evaluation_seconds
                         ),
                     },
                     step=0,
                 )
 
-            for iteration in range(1, TRAINING_CONFIG.iterations + 1):
+            for iteration in range(1, training_config.iterations + 1):
                 phase_id += 1
 
                 rollout_start = perf_counter()
@@ -599,13 +639,16 @@ async def train(args: argparse.Namespace) -> None:
                 trajectories = await collect_trajectories_multiprocess(
                     pool=pool,
                     model=model,
-                    url=RUNNING_CONFIG.url,
-                    fmt=RUNNING_CONFIG.format,
-                    team_seed=TRAINING_CONFIG.team_seed,
-                    battles=(TRAINING_CONFIG.rollout_battles),
-                    worker_count=(RUNNING_CONFIG.workers),
+                    url=running_config.url,
+                    fmt=running_config.format,
+                    team_seed=training_config.team_seed,
+                    battles=(training_config.rollout_battles),
+                    worker_count=(running_config.workers),
                     phase_id=phase_id,
                     temporary_directory=(temporary_directory),
+                    reward_config=reward_config,
+                    model_config=model_config,
+                    tensorizer=tensorizer,
                 )
 
                 rollout_seconds = perf_counter() - rollout_start
@@ -620,7 +663,7 @@ async def train(args: argparse.Namespace) -> None:
                     model=model,
                     optimizer=optimizer,
                     trajectories=trajectories,
-                    config=PPO_CONFIG,
+                    config=ppo_config,
                     device=device,
                 )
 
@@ -713,7 +756,7 @@ async def train(args: argparse.Namespace) -> None:
                     / battle_count,
                 }
 
-                if iteration % TRAINING_CONFIG.eval_interval == 0:
+                if iteration % training_config.eval_interval == 0:
                     phase_id += 1
 
                     evaluation_start = perf_counter()
@@ -721,17 +764,19 @@ async def train(args: argparse.Namespace) -> None:
                     (eval_wins, eval_losses, eval_ties) = await evaluate_multiprocess(
                         pool=pool,
                         model=model,
-                        url=RUNNING_CONFIG.url,
-                        fmt=RUNNING_CONFIG.format,
-                        team_seed=(TRAINING_CONFIG.team_seed),
-                        battles=(TRAINING_CONFIG.eval_battles),
-                        worker_count=(RUNNING_CONFIG.workers),
+                        url=running_config.url,
+                        fmt=running_config.format,
+                        team_seed=(training_config.team_seed),
+                        battles=(training_config.eval_battles),
+                        worker_count=(running_config.workers),
                         phase_id=phase_id,
+                        model_config=model_config,
+                        tensorizer=tensorizer,
                     )
 
                     evaluation_seconds = perf_counter() - evaluation_start
 
-                    win_rate = eval_wins / TRAINING_CONFIG.eval_battles
+                    win_rate = eval_wins / training_config.eval_battles
 
                     best_eval_win_rate = max(best_eval_win_rate, win_rate)
 
@@ -748,7 +793,7 @@ async def train(args: argparse.Namespace) -> None:
                         f"eval_time="
                         f"{evaluation_seconds:.2f}s "
                         f"battles/s="
-                        f"{TRAINING_CONFIG.eval_battles / evaluation_seconds:.2f}"
+                        f"{training_config.eval_battles / evaluation_seconds:.2f}"
                     )
 
                     log_data.update(
@@ -760,13 +805,13 @@ async def train(args: argparse.Namespace) -> None:
                             "eval/best_win_rate": (best_eval_win_rate),
                             "eval/seconds": (evaluation_seconds),
                             "eval/battles_per_second": (
-                                TRAINING_CONFIG.eval_battles / evaluation_seconds
+                                training_config.eval_battles / evaluation_seconds
                             ),
                         }
                     )
 
                     checkpoint = (
-                        RUNNING_CONFIG.checkpoint_dir
+                        running_config.checkpoint_dir
                         / args.wandb_name
                         / (f"iteration_{iteration:05d}.pt")
                     )
@@ -780,7 +825,7 @@ async def train(args: argparse.Namespace) -> None:
 
                     save_checkpoint(
                         path=(
-                            RUNNING_CONFIG.checkpoint_dir
+                            running_config.checkpoint_dir
                             / args.wandb_name
                             / "latest.pt"
                         ),
@@ -807,12 +852,42 @@ async def train(args: argparse.Namespace) -> None:
             wandb_run.finish()
 
 
+def apply_overrides(config, overrides: list[str], types: dict[str, type]) -> None:
+    for override in overrides:
+        key, value = override.split("=", 1)
+
+        if key not in types:
+            raise ValueError(f"Unknown config field: {key}")
+
+        value_type = types[key]
+
+        if value_type is bool:
+            if value.lower() in {"true", "1", "yes"}:
+                parsed_value = True
+            elif value.lower() in {"false", "0", "no"}:
+                parsed_value = False
+            else:
+                raise ValueError(f"Invalid boolean value: {value}")
+        else:
+            parsed_value = value_type(value)
+
+        setattr(config, key, parsed_value)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--wandb-name", default=None)
 
     parser.add_argument("--no-wandb", action="store_true")
+
+    parser.add_argument("--wandb-group", default=None)
+
+    parser.add_argument("--set-training", nargs="*", default=[])
+    parser.add_argument("--set-ppo", nargs="*", default=[])
+    parser.add_argument("--set-reward", nargs="*", default=[])
+    parser.add_argument("--set-running", nargs="*", default=[])
+    parser.add_argument("--set-model", nargs="*", default=[])
 
     args = parser.parse_args()
 
@@ -823,8 +898,98 @@ def parse_args() -> argparse.Namespace:
 
 
 async def main() -> None:
+    PPO_TYPES = {
+        "learning_rate": float,
+        "clip_epsilon": float,
+        "value_coef": float,
+        "entropy_coef": float,
+        "max_grad_norm": float,
+        "epochs": int,
+        "minibatch_size": int,
+        "kl_target": float,
+    }
+    TRAINING_TYPES = {
+        "iterations": int,
+        "rollout_battles": int,
+        "eval_battles": int,
+        "eval_interval": int,
+        "team_seed": int,
+    }
+
+    REWARD_TYPES = {
+        "outcome_weight": float,
+        "own_hp_weight": float,
+        "enemy_hp_weight": float,
+        "speed_weight": float,
+        "speed_scale": float,
+    }
+
+    RUNNING_TYPES = {
+        "url": str,
+        "format": str,
+        "workers": int,
+        "threads": int,
+        "checkpoint_dir": Path,
+        "wandb_project": str,
+        "wandb_entity": str,
+    }
+    MODEL_TYPES = {
+        "species_count": int,
+        "form_count": int,
+        "move_count": int,
+        "item_count": int,
+        "ability_count": int,
+        "status_count": int,
+        "weather_count": int,
+        "tactical_event_type_count": int,
+        "history_ref_count": int,
+        "history_reason_count": int,
+        "species_embedding_dim": int,
+        "form_embedding_dim": int,
+        "move_embedding_dim": int,
+        "item_embedding_dim": int,
+        "ability_embedding_dim": int,
+        "status_embedding_dim": int,
+        "weather_embedding_dim": int,
+        "event_type_embedding_dim": int,
+        "history_ref_embedding_dim": int,
+        "history_reason_embedding_dim": int,
+        "pokemon_hidden_dim": int,
+        "pokemon_output_dim": int,
+        "field_hidden_dim": int,
+        "field_output_dim": int,
+        "tactical_entry_hidden_dim": int,
+        "tactical_entry_output_dim": int,
+        "history_hidden_dim": int,
+        "trunk_hidden_dim": int,
+        "trunk_output_dim": int,
+        "action_count": int,
+        "seed": int,
+    }
+
+    ppo_config = copy(PPO_CONFIG)
+    training_config = copy(TRAINING_CONFIG)
+    reward_config = copy(REWARD_CONFIG)
+    running_config = copy(RUNNING_CONFIG)
+    model_config = copy(MODEL_CONFIG)
+    tensorizer = copy(TENSORIZER)
     args = parse_args()
-    await train(args)
+
+    apply_overrides(ppo_config, args.set_ppo, PPO_TYPES)
+    apply_overrides(training_config, args.set_training, TRAINING_TYPES)
+    apply_overrides(reward_config, args.set_reward, REWARD_TYPES)
+    apply_overrides(running_config, args.set_running, RUNNING_TYPES)
+    apply_overrides(model_config, args.set_model, MODEL_TYPES)
+
+    await train(
+        args,
+        ppo_config,
+        training_config,
+        reward_config,
+        running_config,
+        model_config,
+        tensorizer,
+    )
 
 
 if __name__ == "__main__":
