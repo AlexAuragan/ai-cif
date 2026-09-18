@@ -1,0 +1,1276 @@
+{
+  "schema": "ai-cif-policy-comparison-v1",
+  "state_bank": "data/ref_battle_states.json.gz",
+  "format": "gen1randombattle",
+  "battle_count": 200,
+  "state_count": 9147,
+  "models": {
+    "blue/1": {
+      "checkpoint": "data/models/blue/1.pt",
+      "mean_entropy": 0.7856436967849731,
+      "mean_top1_probability": 0.6943196654319763,
+      "mean_value": 0.5496999025344849,
+      "value_std": 0.0733465701341629,
+      "switch_rate": 0.2353777140378952,
+      "heuristic_disagreement_rate": 0.6669946312904358,
+      "action_counts": {
+        "move_1": 1445,
+        "move_2": 1262,
+        "move_3": 2289,
+        "move_4": 1998,
+        "switch_1": 0,
+        "switch_2": 196,
+        "switch_3": 209,
+        "switch_4": 1053,
+        "switch_5": 492,
+        "switch_6": 203
+      },
+      "action_rates": {
+        "move_1": 0.1579752924456106,
+        "move_2": 0.13796873291789657,
+        "move_3": 0.2502459822892752,
+        "move_4": 0.2184322728763529,
+        "switch_1": 0.0,
+        "switch_2": 0.021427790532415,
+        "switch_3": 0.022849021537115995,
+        "switch_4": 0.11511971138078059,
+        "switch_5": 0.05378812725483765,
+        "switch_6": 0.022193068765715536
+      }
+    },
+    "blue/2": {
+      "checkpoint": "data/models/blue/2.pt",
+      "mean_entropy": 0.8219733238220215,
+      "mean_top1_probability": 0.6831663846969604,
+      "mean_value": 0.5163931846618652,
+      "value_std": 0.08089138567447662,
+      "switch_rate": 0.24248386919498444,
+      "heuristic_disagreement_rate": 0.6841587424278259,
+      "action_counts": {
+        "move_1": 2426,
+        "move_2": 1516,
+        "move_3": 1586,
+        "move_4": 1401,
+        "switch_1": 0,
+        "switch_2": 72,
+        "switch_3": 728,
+        "switch_4": 300,
+        "switch_5": 337,
+        "switch_6": 781
+      },
+      "action_rates": {
+        "move_1": 0.2652235705695857,
+        "move_2": 0.165737400240516,
+        "move_3": 0.17339018257352137,
+        "move_4": 0.15316497212200722,
+        "switch_1": 0.0,
+        "switch_2": 0.00787143325680551,
+        "switch_3": 0.07958893626325571,
+        "switch_4": 0.032797638570022956,
+        "switch_5": 0.03684268066032579,
+        "switch_6": 0.08538318574395977
+      }
+    },
+    "blue/3": {
+      "checkpoint": "data/models/blue/3.pt",
+      "mean_entropy": 0.7884300351142883,
+      "mean_top1_probability": 0.6947837471961975,
+      "mean_value": 0.5507217645645142,
+      "value_std": 0.07882685959339142,
+      "switch_rate": 0.24729418754577637,
+      "heuristic_disagreement_rate": 0.684705376625061,
+      "action_counts": {
+        "move_1": 1121,
+        "move_2": 2520,
+        "move_3": 1471,
+        "move_4": 1773,
+        "switch_1": 0,
+        "switch_2": 62,
+        "switch_3": 140,
+        "switch_4": 176,
+        "switch_5": 1456,
+        "switch_6": 428
+      },
+      "action_rates": {
+        "move_1": 0.12255384278998578,
+        "move_2": 0.2755001639881928,
+        "move_3": 0.16081775445501256,
+        "move_4": 0.1938340439488357,
+        "switch_1": 0.0,
+        "switch_2": 0.006778178637804745,
+        "switch_3": 0.015305564666010714,
+        "switch_4": 0.01924128129441347,
+        "switch_5": 0.15917787252651142,
+        "switch_6": 0.04679129769323275
+      }
+    },
+    "blue/4": {
+      "checkpoint": "data/models/blue/4.pt",
+      "mean_entropy": 0.7796034812927246,
+      "mean_top1_probability": 0.6934769153594971,
+      "mean_value": 0.5619004964828491,
+      "value_std": 0.08907276391983032,
+      "switch_rate": 0.20072154700756073,
+      "heuristic_disagreement_rate": 0.6504864692687988,
+      "action_counts": {
+        "move_1": 1972,
+        "move_2": 1324,
+        "move_3": 2205,
+        "move_4": 1810,
+        "switch_1": 0,
+        "switch_2": 371,
+        "switch_3": 497,
+        "switch_4": 283,
+        "switch_5": 301,
+        "switch_6": 384
+      },
+      "action_rates": {
+        "move_1": 0.21558981086695092,
+        "move_2": 0.14474691155570132,
+        "move_3": 0.24106264348966874,
+        "move_4": 0.1978790860391385,
+        "switch_1": 0.0,
+        "switch_2": 0.040559746364928394,
+        "switch_3": 0.054334754564338034,
+        "switch_4": 0.030939105717721658,
+        "switch_5": 0.03290696403192304,
+        "switch_6": 0.041980977369629385
+      }
+    },
+    "blue/5": {
+      "checkpoint": "data/models/blue/5.pt",
+      "mean_entropy": 0.772675096988678,
+      "mean_top1_probability": 0.7075170278549194,
+      "mean_value": 0.5088409781455994,
+      "value_std": 0.07847930490970612,
+      "switch_rate": 0.22608505189418793,
+      "heuristic_disagreement_rate": 0.676615297794342,
+      "action_counts": {
+        "move_1": 2751,
+        "move_2": 1093,
+        "move_3": 683,
+        "move_4": 2552,
+        "switch_1": 0,
+        "switch_2": 75,
+        "switch_3": 404,
+        "switch_4": 462,
+        "switch_5": 253,
+        "switch_6": 874
+      },
+      "action_rates": {
+        "move_1": 0.3007543456871105,
+        "move_2": 0.11949272985678365,
+        "move_3": 0.07466929047775227,
+        "move_4": 0.2789985787689953,
+        "switch_1": 0.0,
+        "switch_2": 0.008199409642505739,
+        "switch_3": 0.04416748660763092,
+        "switch_4": 0.050508363397835356,
+        "switch_5": 0.02765934186071936,
+        "switch_6": 0.09555045370066688
+      }
+    }
+  },
+  "pairs": [
+    {
+      "model_a": "blue/1",
+      "model_b": "blue/2",
+      "top1_disagreement_rate": 0.7072263956069946,
+      "mean_js_divergence_nats": 0.28419286012649536,
+      "p95_js_divergence_nats": 0.5975240468978882,
+      "mean_abs_value_difference": 0.05897951126098633,
+      "examples": [
+        {
+          "state_index": 602,
+          "battle_id": 13,
+          "side": "a",
+          "turn": 3,
+          "js_divergence": 0.6897180080413818,
+          "model_a_action": "switch_4",
+          "model_b_action": "switch_6",
+          "heuristic_action": "switch_2"
+        },
+        {
+          "state_index": 4027,
+          "battle_id": 89,
+          "side": "a",
+          "turn": 6,
+          "js_divergence": 0.6884845495223999,
+          "model_a_action": "move_4",
+          "model_b_action": "switch_5",
+          "heuristic_action": "move_4"
+        },
+        {
+          "state_index": 4023,
+          "battle_id": 89,
+          "side": "b",
+          "turn": 4,
+          "js_divergence": 0.6869305372238159,
+          "model_a_action": "switch_5",
+          "model_b_action": "switch_6",
+          "heuristic_action": "switch_3"
+        },
+        {
+          "state_index": 7633,
+          "battle_id": 168,
+          "side": "b",
+          "turn": 9,
+          "js_divergence": 0.6850952506065369,
+          "model_a_action": "move_3",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_2"
+        },
+        {
+          "state_index": 4992,
+          "battle_id": 110,
+          "side": "b",
+          "turn": 12,
+          "js_divergence": 0.6846259832382202,
+          "model_a_action": "switch_4",
+          "model_b_action": "switch_6",
+          "heuristic_action": "switch_4"
+        },
+        {
+          "state_index": 3695,
+          "battle_id": 82,
+          "side": "a",
+          "turn": 5,
+          "js_divergence": 0.6844915151596069,
+          "model_a_action": "move_4",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_1"
+        },
+        {
+          "state_index": 6118,
+          "battle_id": 135,
+          "side": "a",
+          "turn": 3,
+          "js_divergence": 0.682475745677948,
+          "model_a_action": "switch_4",
+          "model_b_action": "switch_6",
+          "heuristic_action": "switch_4"
+        },
+        {
+          "state_index": 8584,
+          "battle_id": 187,
+          "side": "a",
+          "turn": 5,
+          "js_divergence": 0.6824125051498413,
+          "model_a_action": "switch_4",
+          "model_b_action": "switch_3",
+          "heuristic_action": "switch_6"
+        },
+        {
+          "state_index": 5274,
+          "battle_id": 117,
+          "side": "b",
+          "turn": 1,
+          "js_divergence": 0.6818956136703491,
+          "model_a_action": "switch_4",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_2"
+        },
+        {
+          "state_index": 3131,
+          "battle_id": 69,
+          "side": "a",
+          "turn": 6,
+          "js_divergence": 0.6813837289810181,
+          "model_a_action": "move_3",
+          "model_b_action": "switch_4",
+          "heuristic_action": "move_1"
+        }
+      ]
+    },
+    {
+      "model_a": "blue/1",
+      "model_b": "blue/3",
+      "top1_disagreement_rate": 0.6913742423057556,
+      "mean_js_divergence_nats": 0.2793414890766144,
+      "p95_js_divergence_nats": 0.6063817143440247,
+      "mean_abs_value_difference": 0.05497211217880249,
+      "examples": [
+        {
+          "state_index": 8850,
+          "battle_id": 193,
+          "side": "a",
+          "turn": 1,
+          "js_divergence": 0.6922357082366943,
+          "model_a_action": "switch_4",
+          "model_b_action": "switch_5",
+          "heuristic_action": "switch_2"
+        },
+        {
+          "state_index": 5837,
+          "battle_id": 129,
+          "side": "b",
+          "turn": 3,
+          "js_divergence": 0.691771924495697,
+          "model_a_action": "switch_4",
+          "model_b_action": "switch_5",
+          "heuristic_action": "switch_3"
+        },
+        {
+          "state_index": 7131,
+          "battle_id": 158,
+          "side": "a",
+          "turn": 5,
+          "js_divergence": 0.6916954517364502,
+          "model_a_action": "switch_4",
+          "model_b_action": "switch_5",
+          "heuristic_action": "switch_4"
+        },
+        {
+          "state_index": 8436,
+          "battle_id": 184,
+          "side": "b",
+          "turn": 5,
+          "js_divergence": 0.6914789080619812,
+          "model_a_action": "switch_4",
+          "model_b_action": "switch_5",
+          "heuristic_action": "switch_2"
+        },
+        {
+          "state_index": 8857,
+          "battle_id": 193,
+          "side": "b",
+          "turn": 3,
+          "js_divergence": 0.6912135481834412,
+          "model_a_action": "switch_4",
+          "model_b_action": "switch_5",
+          "heuristic_action": "switch_6"
+        },
+        {
+          "state_index": 8316,
+          "battle_id": 181,
+          "side": "a",
+          "turn": 9,
+          "js_divergence": 0.6911135911941528,
+          "model_a_action": "switch_4",
+          "model_b_action": "switch_5",
+          "heuristic_action": "switch_3"
+        },
+        {
+          "state_index": 7268,
+          "battle_id": 161,
+          "side": "b",
+          "turn": 8,
+          "js_divergence": 0.6908373832702637,
+          "model_a_action": "switch_4",
+          "model_b_action": "switch_5",
+          "heuristic_action": "switch_2"
+        },
+        {
+          "state_index": 602,
+          "battle_id": 13,
+          "side": "a",
+          "turn": 3,
+          "js_divergence": 0.690791666507721,
+          "model_a_action": "switch_4",
+          "model_b_action": "switch_5",
+          "heuristic_action": "switch_2"
+        },
+        {
+          "state_index": 4299,
+          "battle_id": 95,
+          "side": "b",
+          "turn": 8,
+          "js_divergence": 0.6906402111053467,
+          "model_a_action": "switch_4",
+          "model_b_action": "switch_5",
+          "heuristic_action": "switch_2"
+        },
+        {
+          "state_index": 4616,
+          "battle_id": 102,
+          "side": "a",
+          "turn": 9,
+          "js_divergence": 0.690567135810852,
+          "model_a_action": "move_4",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_3"
+        }
+      ]
+    },
+    {
+      "model_a": "blue/1",
+      "model_b": "blue/4",
+      "top1_disagreement_rate": 0.6857986450195312,
+      "mean_js_divergence_nats": 0.25850385427474976,
+      "p95_js_divergence_nats": 0.5860925316810608,
+      "mean_abs_value_difference": 0.05507230758666992,
+      "examples": [
+        {
+          "state_index": 8898,
+          "battle_id": 194,
+          "side": "a",
+          "turn": 5,
+          "js_divergence": 0.6914055347442627,
+          "model_a_action": "move_4",
+          "model_b_action": "move_3",
+          "heuristic_action": "move_2"
+        },
+        {
+          "state_index": 8136,
+          "battle_id": 178,
+          "side": "a",
+          "turn": 3,
+          "js_divergence": 0.6892104148864746,
+          "model_a_action": "switch_4",
+          "model_b_action": "switch_2",
+          "heuristic_action": "switch_2"
+        },
+        {
+          "state_index": 7618,
+          "battle_id": 168,
+          "side": "a",
+          "turn": 3,
+          "js_divergence": 0.6878404021263123,
+          "model_a_action": "switch_4",
+          "model_b_action": "switch_3",
+          "heuristic_action": "switch_5"
+        },
+        {
+          "state_index": 2743,
+          "battle_id": 61,
+          "side": "a",
+          "turn": 1,
+          "js_divergence": 0.6866549849510193,
+          "model_a_action": "switch_4",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_3"
+        },
+        {
+          "state_index": 2749,
+          "battle_id": 61,
+          "side": "a",
+          "turn": 3,
+          "js_divergence": 0.686075747013092,
+          "model_a_action": "switch_4",
+          "model_b_action": "switch_3",
+          "heuristic_action": "switch_6"
+        },
+        {
+          "state_index": 8250,
+          "battle_id": 180,
+          "side": "b",
+          "turn": 3,
+          "js_divergence": 0.684808611869812,
+          "model_a_action": "move_4",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_2"
+        },
+        {
+          "state_index": 1317,
+          "battle_id": 29,
+          "side": "b",
+          "turn": 2,
+          "js_divergence": 0.6837433576583862,
+          "model_a_action": "switch_4",
+          "model_b_action": "switch_3",
+          "heuristic_action": "switch_3"
+        },
+        {
+          "state_index": 7465,
+          "battle_id": 165,
+          "side": "a",
+          "turn": 4,
+          "js_divergence": 0.6831798553466797,
+          "model_a_action": "switch_5",
+          "model_b_action": "switch_2",
+          "heuristic_action": "switch_3"
+        },
+        {
+          "state_index": 4744,
+          "battle_id": 105,
+          "side": "b",
+          "turn": 5,
+          "js_divergence": 0.6816524267196655,
+          "model_a_action": "switch_4",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_1"
+        },
+        {
+          "state_index": 4605,
+          "battle_id": 102,
+          "side": "a",
+          "turn": 5,
+          "js_divergence": 0.6812567710876465,
+          "model_a_action": "switch_4",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_1"
+        }
+      ]
+    },
+    {
+      "model_a": "blue/1",
+      "model_b": "blue/5",
+      "top1_disagreement_rate": 0.7119274139404297,
+      "mean_js_divergence_nats": 0.2923174202442169,
+      "p95_js_divergence_nats": 0.6183968186378479,
+      "mean_abs_value_difference": 0.06427789479494095,
+      "examples": [
+        {
+          "state_index": 3697,
+          "battle_id": 82,
+          "side": "b",
+          "turn": 5,
+          "js_divergence": 0.691779375076294,
+          "model_a_action": "move_3",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_3"
+        },
+        {
+          "state_index": 1715,
+          "battle_id": 38,
+          "side": "b",
+          "turn": 6,
+          "js_divergence": 0.6909981966018677,
+          "model_a_action": "move_3",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_2"
+        },
+        {
+          "state_index": 3377,
+          "battle_id": 74,
+          "side": "b",
+          "turn": 17,
+          "js_divergence": 0.6899126768112183,
+          "model_a_action": "move_4",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_4"
+        },
+        {
+          "state_index": 3695,
+          "battle_id": 82,
+          "side": "a",
+          "turn": 5,
+          "js_divergence": 0.6895108222961426,
+          "model_a_action": "move_4",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_1"
+        },
+        {
+          "state_index": 5949,
+          "battle_id": 131,
+          "side": "b",
+          "turn": 12,
+          "js_divergence": 0.6888042688369751,
+          "model_a_action": "move_3",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_4"
+        },
+        {
+          "state_index": 4793,
+          "battle_id": 106,
+          "side": "b",
+          "turn": 5,
+          "js_divergence": 0.6887998580932617,
+          "model_a_action": "move_2",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_3"
+        },
+        {
+          "state_index": 1628,
+          "battle_id": 36,
+          "side": "a",
+          "turn": 3,
+          "js_divergence": 0.6882730722427368,
+          "model_a_action": "move_4",
+          "model_b_action": "move_3",
+          "heuristic_action": "move_2"
+        },
+        {
+          "state_index": 6907,
+          "battle_id": 153,
+          "side": "b",
+          "turn": 9,
+          "js_divergence": 0.6881941556930542,
+          "model_a_action": "move_4",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_2"
+        },
+        {
+          "state_index": 2775,
+          "battle_id": 61,
+          "side": "a",
+          "turn": 13,
+          "js_divergence": 0.6881852149963379,
+          "model_a_action": "move_3",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_3"
+        },
+        {
+          "state_index": 5931,
+          "battle_id": 131,
+          "side": "b",
+          "turn": 5,
+          "js_divergence": 0.6879702806472778,
+          "model_a_action": "move_4",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_3"
+        }
+      ]
+    },
+    {
+      "model_a": "blue/2",
+      "model_b": "blue/3",
+      "top1_disagreement_rate": 0.7081010341644287,
+      "mean_js_divergence_nats": 0.2875809371471405,
+      "p95_js_divergence_nats": 0.597987949848175,
+      "mean_abs_value_difference": 0.061533745378255844,
+      "examples": [
+        {
+          "state_index": 665,
+          "battle_id": 14,
+          "side": "b",
+          "turn": 10,
+          "js_divergence": 0.6916648149490356,
+          "model_a_action": "switch_6",
+          "model_b_action": "switch_5",
+          "heuristic_action": "switch_3"
+        },
+        {
+          "state_index": 6703,
+          "battle_id": 148,
+          "side": "b",
+          "turn": 3,
+          "js_divergence": 0.68708735704422,
+          "model_a_action": "move_1",
+          "model_b_action": "move_4",
+          "heuristic_action": "switch_3"
+        },
+        {
+          "state_index": 4833,
+          "battle_id": 107,
+          "side": "b",
+          "turn": 5,
+          "js_divergence": 0.6838364601135254,
+          "model_a_action": "switch_3",
+          "model_b_action": "switch_5",
+          "heuristic_action": "switch_4"
+        },
+        {
+          "state_index": 4023,
+          "battle_id": 89,
+          "side": "b",
+          "turn": 4,
+          "js_divergence": 0.6836452484130859,
+          "model_a_action": "switch_6",
+          "model_b_action": "switch_5",
+          "heuristic_action": "switch_3"
+        },
+        {
+          "state_index": 8489,
+          "battle_id": 185,
+          "side": "a",
+          "turn": 10,
+          "js_divergence": 0.6831760406494141,
+          "model_a_action": "move_4",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_3"
+        },
+        {
+          "state_index": 4531,
+          "battle_id": 100,
+          "side": "a",
+          "turn": 4,
+          "js_divergence": 0.6828057169914246,
+          "model_a_action": "move_1",
+          "model_b_action": "move_3",
+          "heuristic_action": "move_1"
+        },
+        {
+          "state_index": 3243,
+          "battle_id": 71,
+          "side": "b",
+          "turn": 10,
+          "js_divergence": 0.6805613040924072,
+          "model_a_action": "switch_6",
+          "model_b_action": "switch_5",
+          "heuristic_action": "switch_6"
+        },
+        {
+          "state_index": 5771,
+          "battle_id": 127,
+          "side": "a",
+          "turn": 15,
+          "js_divergence": 0.6799495816230774,
+          "model_a_action": "switch_6",
+          "model_b_action": "switch_5",
+          "heuristic_action": "switch_5"
+        },
+        {
+          "state_index": 6978,
+          "battle_id": 154,
+          "side": "b",
+          "turn": 15,
+          "js_divergence": 0.6797003746032715,
+          "model_a_action": "move_3",
+          "model_b_action": "move_4",
+          "heuristic_action": "move_3"
+        },
+        {
+          "state_index": 8059,
+          "battle_id": 176,
+          "side": "a",
+          "turn": 8,
+          "js_divergence": 0.6795819997787476,
+          "model_a_action": "move_1",
+          "model_b_action": "move_3",
+          "heuristic_action": "move_3"
+        }
+      ]
+    },
+    {
+      "model_a": "blue/2",
+      "model_b": "blue/4",
+      "top1_disagreement_rate": 0.6921395063400269,
+      "mean_js_divergence_nats": 0.26773640513420105,
+      "p95_js_divergence_nats": 0.5875409245491028,
+      "mean_abs_value_difference": 0.06838835775852203,
+      "examples": [
+        {
+          "state_index": 4887,
+          "battle_id": 108,
+          "side": "b",
+          "turn": 7,
+          "js_divergence": 0.690433144569397,
+          "model_a_action": "move_2",
+          "model_b_action": "move_3",
+          "heuristic_action": "move_2"
+        },
+        {
+          "state_index": 6703,
+          "battle_id": 148,
+          "side": "b",
+          "turn": 3,
+          "js_divergence": 0.6882452368736267,
+          "model_a_action": "move_1",
+          "model_b_action": "move_4",
+          "heuristic_action": "switch_3"
+        },
+        {
+          "state_index": 3467,
+          "battle_id": 77,
+          "side": "b",
+          "turn": 4,
+          "js_divergence": 0.6871374845504761,
+          "model_a_action": "move_3",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_3"
+        },
+        {
+          "state_index": 4208,
+          "battle_id": 93,
+          "side": "b",
+          "turn": 7,
+          "js_divergence": 0.6870418190956116,
+          "model_a_action": "switch_6",
+          "model_b_action": "switch_2",
+          "heuristic_action": "switch_6"
+        },
+        {
+          "state_index": 2330,
+          "battle_id": 52,
+          "side": "a",
+          "turn": 3,
+          "js_divergence": 0.6867923736572266,
+          "model_a_action": "switch_3",
+          "model_b_action": "switch_2",
+          "heuristic_action": "switch_2"
+        },
+        {
+          "state_index": 8198,
+          "battle_id": 179,
+          "side": "a",
+          "turn": 7,
+          "js_divergence": 0.6865290403366089,
+          "model_a_action": "move_1",
+          "model_b_action": "move_3",
+          "heuristic_action": "move_1"
+        },
+        {
+          "state_index": 3745,
+          "battle_id": 83,
+          "side": "b",
+          "turn": 7,
+          "js_divergence": 0.6860401630401611,
+          "model_a_action": "move_1",
+          "model_b_action": "move_3",
+          "heuristic_action": "move_1"
+        },
+        {
+          "state_index": 807,
+          "battle_id": 18,
+          "side": "b",
+          "turn": 4,
+          "js_divergence": 0.6849955916404724,
+          "model_a_action": "move_1",
+          "model_b_action": "move_3",
+          "heuristic_action": "move_3"
+        },
+        {
+          "state_index": 4972,
+          "battle_id": 110,
+          "side": "a",
+          "turn": 5,
+          "js_divergence": 0.684828519821167,
+          "model_a_action": "move_1",
+          "model_b_action": "move_4",
+          "heuristic_action": "move_1"
+        },
+        {
+          "state_index": 3695,
+          "battle_id": 82,
+          "side": "a",
+          "turn": 5,
+          "js_divergence": 0.6840190887451172,
+          "model_a_action": "move_1",
+          "model_b_action": "move_3",
+          "heuristic_action": "move_1"
+        }
+      ]
+    },
+    {
+      "model_a": "blue/2",
+      "model_b": "blue/5",
+      "top1_disagreement_rate": 0.6816442608833313,
+      "mean_js_divergence_nats": 0.2717626988887787,
+      "p95_js_divergence_nats": 0.5923423767089844,
+      "mean_abs_value_difference": 0.056643761694431305,
+      "examples": [
+        {
+          "state_index": 816,
+          "battle_id": 18,
+          "side": "a",
+          "turn": 8,
+          "js_divergence": 0.6876260042190552,
+          "model_a_action": "move_3",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_3"
+        },
+        {
+          "state_index": 761,
+          "battle_id": 17,
+          "side": "b",
+          "turn": 4,
+          "js_divergence": 0.686672568321228,
+          "model_a_action": "move_4",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_3"
+        },
+        {
+          "state_index": 166,
+          "battle_id": 3,
+          "side": "a",
+          "turn": 13,
+          "js_divergence": 0.6849919557571411,
+          "model_a_action": "move_3",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_3"
+        },
+        {
+          "state_index": 1685,
+          "battle_id": 37,
+          "side": "b",
+          "turn": 12,
+          "js_divergence": 0.6825119256973267,
+          "model_a_action": "move_3",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_1"
+        },
+        {
+          "state_index": 3989,
+          "battle_id": 88,
+          "side": "a",
+          "turn": 8,
+          "js_divergence": 0.6823511123657227,
+          "model_a_action": "move_2",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_2"
+        },
+        {
+          "state_index": 2865,
+          "battle_id": 63,
+          "side": "b",
+          "turn": 12,
+          "js_divergence": 0.6822212338447571,
+          "model_a_action": "move_3",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_3"
+        },
+        {
+          "state_index": 4793,
+          "battle_id": 106,
+          "side": "b",
+          "turn": 5,
+          "js_divergence": 0.681559145450592,
+          "model_a_action": "move_4",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_3"
+        },
+        {
+          "state_index": 8575,
+          "battle_id": 187,
+          "side": "a",
+          "turn": 2,
+          "js_divergence": 0.6815325021743774,
+          "model_a_action": "move_3",
+          "model_b_action": "move_4",
+          "heuristic_action": "move_1"
+        },
+        {
+          "state_index": 5550,
+          "battle_id": 123,
+          "side": "b",
+          "turn": 5,
+          "js_divergence": 0.6810528039932251,
+          "model_a_action": "move_2",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_2"
+        },
+        {
+          "state_index": 7952,
+          "battle_id": 174,
+          "side": "b",
+          "turn": 3,
+          "js_divergence": 0.6808432936668396,
+          "model_a_action": "move_4",
+          "model_b_action": "move_3",
+          "heuristic_action": "move_1"
+        }
+      ]
+    },
+    {
+      "model_a": "blue/3",
+      "model_b": "blue/4",
+      "top1_disagreement_rate": 0.708975613117218,
+      "mean_js_divergence_nats": 0.2763844430446625,
+      "p95_js_divergence_nats": 0.5894436836242676,
+      "mean_abs_value_difference": 0.057669900357723236,
+      "examples": [
+        {
+          "state_index": 3553,
+          "battle_id": 79,
+          "side": "a",
+          "turn": 5,
+          "js_divergence": 0.6896541714668274,
+          "model_a_action": "switch_5",
+          "model_b_action": "switch_2",
+          "heuristic_action": "switch_2"
+        },
+        {
+          "state_index": 3243,
+          "battle_id": 71,
+          "side": "b",
+          "turn": 10,
+          "js_divergence": 0.6888428926467896,
+          "model_a_action": "switch_5",
+          "model_b_action": "switch_2",
+          "heuristic_action": "switch_6"
+        },
+        {
+          "state_index": 2330,
+          "battle_id": 52,
+          "side": "a",
+          "turn": 3,
+          "js_divergence": 0.6882604360580444,
+          "model_a_action": "switch_5",
+          "model_b_action": "switch_2",
+          "heuristic_action": "switch_2"
+        },
+        {
+          "state_index": 5837,
+          "battle_id": 129,
+          "side": "b",
+          "turn": 3,
+          "js_divergence": 0.6880499124526978,
+          "model_a_action": "switch_5",
+          "model_b_action": "switch_2",
+          "heuristic_action": "switch_3"
+        },
+        {
+          "state_index": 695,
+          "battle_id": 15,
+          "side": "b",
+          "turn": 3,
+          "js_divergence": 0.6871311664581299,
+          "model_a_action": "move_4",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_1"
+        },
+        {
+          "state_index": 2560,
+          "battle_id": 57,
+          "side": "b",
+          "turn": 9,
+          "js_divergence": 0.6857677698135376,
+          "model_a_action": "switch_5",
+          "model_b_action": "switch_2",
+          "heuristic_action": "switch_3"
+        },
+        {
+          "state_index": 3413,
+          "battle_id": 75,
+          "side": "b",
+          "turn": 14,
+          "js_divergence": 0.685528576374054,
+          "model_a_action": "switch_5",
+          "model_b_action": "switch_4",
+          "heuristic_action": "switch_2"
+        },
+        {
+          "state_index": 6115,
+          "battle_id": 135,
+          "side": "b",
+          "turn": 2,
+          "js_divergence": 0.6842917203903198,
+          "model_a_action": "move_2",
+          "model_b_action": "move_4",
+          "heuristic_action": "move_2"
+        },
+        {
+          "state_index": 8216,
+          "battle_id": 179,
+          "side": "a",
+          "turn": 14,
+          "js_divergence": 0.6839005947113037,
+          "model_a_action": "switch_5",
+          "model_b_action": "switch_4",
+          "heuristic_action": "switch_4"
+        },
+        {
+          "state_index": 6547,
+          "battle_id": 144,
+          "side": "a",
+          "turn": 10,
+          "js_divergence": 0.6816120147705078,
+          "model_a_action": "switch_5",
+          "model_b_action": "switch_4",
+          "heuristic_action": "switch_5"
+        }
+      ]
+    },
+    {
+      "model_a": "blue/3",
+      "model_b": "blue/5",
+      "top1_disagreement_rate": 0.7145512104034424,
+      "mean_js_divergence_nats": 0.2966335117816925,
+      "p95_js_divergence_nats": 0.6206713914871216,
+      "mean_abs_value_difference": 0.06585945934057236,
+      "examples": [
+        {
+          "state_index": 4570,
+          "battle_id": 101,
+          "side": "b",
+          "turn": 6,
+          "js_divergence": 0.6925228834152222,
+          "model_a_action": "move_2",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_3"
+        },
+        {
+          "state_index": 417,
+          "battle_id": 9,
+          "side": "b",
+          "turn": 8,
+          "js_divergence": 0.6908595561981201,
+          "model_a_action": "move_2",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_4"
+        },
+        {
+          "state_index": 3275,
+          "battle_id": 72,
+          "side": "a",
+          "turn": 7,
+          "js_divergence": 0.688835859298706,
+          "model_a_action": "move_2",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_2"
+        },
+        {
+          "state_index": 2433,
+          "battle_id": 54,
+          "side": "a",
+          "turn": 12,
+          "js_divergence": 0.6887469291687012,
+          "model_a_action": "move_4",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_2"
+        },
+        {
+          "state_index": 1984,
+          "battle_id": 44,
+          "side": "b",
+          "turn": 18,
+          "js_divergence": 0.6876509189605713,
+          "model_a_action": "move_4",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_1"
+        },
+        {
+          "state_index": 5170,
+          "battle_id": 114,
+          "side": "b",
+          "turn": 9,
+          "js_divergence": 0.6869529485702515,
+          "model_a_action": "switch_5",
+          "model_b_action": "switch_6",
+          "heuristic_action": "switch_3"
+        },
+        {
+          "state_index": 6640,
+          "battle_id": 146,
+          "side": "b",
+          "turn": 10,
+          "js_divergence": 0.6863268613815308,
+          "model_a_action": "move_4",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_4"
+        },
+        {
+          "state_index": 7313,
+          "battle_id": 162,
+          "side": "a",
+          "turn": 3,
+          "js_divergence": 0.6860929727554321,
+          "model_a_action": "move_1",
+          "model_b_action": "move_2",
+          "heuristic_action": "move_3"
+        },
+        {
+          "state_index": 1898,
+          "battle_id": 43,
+          "side": "b",
+          "turn": 8,
+          "js_divergence": 0.6846295595169067,
+          "model_a_action": "move_4",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_3"
+        },
+        {
+          "state_index": 7257,
+          "battle_id": 161,
+          "side": "a",
+          "turn": 4,
+          "js_divergence": 0.6844054460525513,
+          "model_a_action": "move_2",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_3"
+        }
+      ]
+    },
+    {
+      "model_a": "blue/4",
+      "model_b": "blue/5",
+      "top1_disagreement_rate": 0.6815349459648132,
+      "mean_js_divergence_nats": 0.2654779851436615,
+      "p95_js_divergence_nats": 0.6034954190254211,
+      "mean_abs_value_difference": 0.07157688587903976,
+      "examples": [
+        {
+          "state_index": 4748,
+          "battle_id": 105,
+          "side": "b",
+          "turn": 6,
+          "js_divergence": 0.6910804510116577,
+          "model_a_action": "move_3",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_1"
+        },
+        {
+          "state_index": 858,
+          "battle_id": 19,
+          "side": "a",
+          "turn": 4,
+          "js_divergence": 0.6908714175224304,
+          "model_a_action": "move_3",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_1"
+        },
+        {
+          "state_index": 2951,
+          "battle_id": 65,
+          "side": "b",
+          "turn": 10,
+          "js_divergence": 0.6895934343338013,
+          "model_a_action": "move_3",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_4"
+        },
+        {
+          "state_index": 2148,
+          "battle_id": 48,
+          "side": "b",
+          "turn": 3,
+          "js_divergence": 0.6894629001617432,
+          "model_a_action": "move_2",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_2"
+        },
+        {
+          "state_index": 4975,
+          "battle_id": 110,
+          "side": "a",
+          "turn": 6,
+          "js_divergence": 0.6889212131500244,
+          "model_a_action": "move_4",
+          "model_b_action": "move_1",
+          "heuristic_action": "switch_2"
+        },
+        {
+          "state_index": 1900,
+          "battle_id": 43,
+          "side": "b",
+          "turn": 9,
+          "js_divergence": 0.6884990334510803,
+          "model_a_action": "move_3",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_3"
+        },
+        {
+          "state_index": 3695,
+          "battle_id": 82,
+          "side": "a",
+          "turn": 5,
+          "js_divergence": 0.6884269714355469,
+          "model_a_action": "move_3",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_1"
+        },
+        {
+          "state_index": 3697,
+          "battle_id": 82,
+          "side": "b",
+          "turn": 5,
+          "js_divergence": 0.6876307725906372,
+          "model_a_action": "move_3",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_3"
+        },
+        {
+          "state_index": 8058,
+          "battle_id": 176,
+          "side": "b",
+          "turn": 7,
+          "js_divergence": 0.6874154806137085,
+          "model_a_action": "move_3",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_3"
+        },
+        {
+          "state_index": 7766,
+          "battle_id": 170,
+          "side": "a",
+          "turn": 3,
+          "js_divergence": 0.6872619390487671,
+          "model_a_action": "move_2",
+          "model_b_action": "move_1",
+          "heuristic_action": "move_3"
+        }
+      ]
+    }
+  ]
+}
