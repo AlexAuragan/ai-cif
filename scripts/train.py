@@ -1,22 +1,27 @@
 import argparse
 import asyncio
 import multiprocessing
+import os
 import tempfile
 from concurrent.futures import ProcessPoolExecutor
 from copy import copy
 from dataclasses import asdict
+from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from time import perf_counter
 
 import torch
+import wandb
+from dotenv import load_dotenv
 from showdown_sdk.classes.client import Client
 from showdown_sdk.classes.combat_handler import RandomMoveCombatHandler
 from showdown_sdk.exceptions import BattleLifecycleError
 from showdown_sdk.models.sdk import SampleTeamGenerator
-from showdown_sdk.models.sdk.team_generators.team_generator import BaseTeamGenerator
+from showdown_sdk.models.sdk.team_generators.team_generator import (
+    BaseTeamGenerator,
+)
 
-import wandb
 from ai_cif.inference.combat_handler import NeuralCombatHandler
 from ai_cif.model.config import ModelConfig
 from ai_cif.model.model import BattleModel
@@ -41,11 +46,23 @@ from ai_cif.vectorization.tensorizer import (
     BattleTensorizer,
 )
 from scripts.utils.battles import outcome_for, run_battle
+from scripts.utils.config import (
+    MODEL_TYPES,
+    PPO_TYPES,
+    REWARD_TYPES,
+    RUNNING_TYPES,
+    TRAINING_TYPES,
+)
 from scripts.utils.metrics import print_initial_metrics, print_metrics
 from scripts.utils.model import save_checkpoint, snapshot_model
 from scripts.utils.multithreading import split_battles, worker_initializer
 
-DEFAULT_WEBSOCKET_URL = "ws://127.0.0.1:8000/showdown/websocket"
+load_dotenv()
+
+DEFAULT_WEBSOCKET_URL = (
+    os.environ.get("DEFAULT_WEBSOCKET_URL")
+    or "ws://127.0.0.1:8000/showdown/websocket"
+)
 
 REWARD_CONFIG = RewardConfig(
     outcome_weight=0.0,
@@ -79,8 +96,8 @@ TRAINING_CONFIG = TrainingConfig(
 RUNNING_CONFIG = RunningConfig(
     url=DEFAULT_WEBSOCKET_URL,
     format="gen1randombattle",
-    workers=4,
-    threads=4,
+    workers=20,
+    threads=1,
     checkpoint_dir=Path("checkpoints"),
     wandb_project="ai-cif",
     wandb_entity=None,
@@ -102,7 +119,9 @@ MODEL_CONFIG = ModelConfig(
 )
 
 
-def create_model(device: torch.device, model_config: ModelConfig) -> BattleModel:
+def create_model(
+    device: torch.device, model_config: ModelConfig
+) -> BattleModel:
     torch.manual_seed(model_config.seed)
     model = BattleModel(
         config=model_config,
@@ -149,11 +168,14 @@ async def collect_trajectories(
             print(f"Discarding failed battle and retrying: {error!r}")
 
             await asyncio.gather(
-                neural_client.close(), random_client.close(), return_exceptions=True
+                neural_client.close(),
+                random_client.close(),
+                return_exceptions=True,
             )
 
             await asyncio.gather(
-                neural_client.ensure_connected(), random_client.ensure_connected()
+                neural_client.ensure_connected(),
+                random_client.ensure_connected(),
             )
 
             continue
@@ -225,12 +247,19 @@ async def _rollout_worker_async(
     model_config: ModelConfig,
     tensorizer: BattleTensorizer,
 ) -> str:
+    device = (
+        torch.device("cuda")
+        if torch.cuda.is_available()
+        else torch.device("cpu")
+    )
     device = torch.device("cpu")
     model = create_model(device, model_config)
     model.load_state_dict(model_state)
     model.eval()
 
-    handler = TrainingCombatHandler(model=model, tensorizer=tensorizer, device=device)
+    handler = TrainingCombatHandler(
+        model=model, tensorizer=tensorizer, device=device
+    )
 
     neural_client = Client(url, combat_handler=handler)
 
@@ -325,12 +354,19 @@ async def _evaluation_worker_async(
     model_config: ModelConfig,
     tensorizer: BattleTensorizer,
 ) -> tuple[int, int, int]:
+    device = (
+        torch.device("cuda")
+        if torch.cuda.is_available()
+        else torch.device("cpu")
+    )
     device = torch.device("cpu")
     model = create_model(device, model_config)
     model.load_state_dict(model_state)
     model.eval()
 
-    handler = NeuralCombatHandler(model=model, tensorizer=tensorizer, device=device)
+    handler = NeuralCombatHandler(
+        model=model, tensorizer=tensorizer, device=device
+    )
 
     neural_client = Client(url, combat_handler=handler)
 
@@ -429,7 +465,8 @@ async def collect_trajectories_multiprocess(
             continue
 
         output_path = (
-            temporary_directory / f"phase_{phase_id:05d}_worker_{worker_index:03d}.pt"
+            temporary_directory
+            / f"phase_{phase_id:05d}_worker_{worker_index:03d}.pt"
         )
 
         tasks.append(
@@ -464,11 +501,15 @@ async def collect_trajectories_multiprocess(
         )
 
         if not isinstance(worker_trajectories, list):
-            raise TypeError("Rollout worker returned a non-list trajectory chunk")
+            raise TypeError(
+                "Rollout worker returned a non-list trajectory chunk"
+            )
 
         for trajectory in worker_trajectories:
             if not isinstance(trajectory, Trajectory):
-                raise TypeError("Rollout worker returned an invalid trajectory object")
+                raise TypeError(
+                    "Rollout worker returned an invalid trajectory object"
+                )
 
         trajectories.extend(worker_trajectories)
         output_path.unlink()
@@ -535,7 +576,7 @@ async def train(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     print(f"Training device: {device}")
-    print("Rollout device: cpu")
+    print(f"Rollout device: {device}")
     print(f"Rollout processes: {running_config.workers}")
     print(f"PyTorch threads per rollout process: {running_config.threads}")
 
@@ -545,13 +586,17 @@ async def train(
     parameter_count = sum(parameter.numel() for parameter in model.parameters())
 
     print(f"Model parameters: {parameter_count:,}")
-    optimizer = torch.optim.Adam(model.parameters(), lr=ppo_config.learning_rate)
+    optimizer = torch.optim.Adam(
+        model.parameters(), lr=ppo_config.learning_rate
+    )
 
     wandb_run = None
 
     if not args.no_wandb:
         _running_config = asdict(running_config)
-        _running_config["checkpoint_dir"] = str(_running_config["checkpoint_dir"])
+        _running_config["checkpoint_dir"] = str(
+            _running_config["checkpoint_dir"]
+        )
         wandb_run = wandb.init(
             project=running_config.wandb_project,
             entity=running_config.wandb_entity,
@@ -613,7 +658,9 @@ async def train(
             best_eval_win_rate = initial_win_rate
 
             eval_battles = training_config.eval_battles
-            print_initial_metrics(wins, losses, ties, eval_battles, evaluation_seconds)
+            print_initial_metrics(
+                wins, losses, ties, eval_battles, evaluation_seconds
+            )
 
             if wandb_run is not None:
                 wandb_run.log(
@@ -653,7 +700,9 @@ async def train(
 
                 rollout_seconds = perf_counter() - rollout_start
 
-                (wins, losses, ties, decisions) = summarize_trajectories(trajectories)
+                (wins, losses, ties, decisions) = summarize_trajectories(
+                    trajectories
+                )
 
                 mean_reward = mean_trajectory_reward(trajectories)
 
@@ -683,14 +732,17 @@ async def train(
                     raise RuntimeError("Missing reward breakdown")
 
                 reward_breakdowns = [
-                    breakdown for breakdown in breakdowns if breakdown is not None
+                    breakdown
+                    for breakdown in breakdowns
+                    if breakdown is not None
                 ]
 
                 print()
+                print(datetime.now(tz=UTC).strftime("%c"))  # type:ignore
                 print(
                     f"iteration={iteration} "
-                    f"battles={battle_count} "
-                    f"decisions={decisions}"
+                    + f"battles={battle_count} "
+                    + f"decisions={decisions}"
                 )
 
                 print(f"train wins={wins} losses={losses} ties={ties}")
@@ -718,8 +770,12 @@ async def train(
                     "train/mean_reward": (mean_reward),
                     "train/mean_decisions_per_battle": (mean_decisions),
                     "rollout/seconds": (rollout_seconds),
-                    "rollout/battles_per_second": (battle_count / rollout_seconds),
-                    "rollout/decisions_per_second": (decisions / rollout_seconds),
+                    "rollout/battles_per_second": (
+                        battle_count / rollout_seconds
+                    ),
+                    "rollout/decisions_per_second": (
+                        decisions / rollout_seconds
+                    ),
                     "ppo/seconds": ppo_seconds,
                     "ppo/policy_loss": (metrics.policy_loss),
                     "ppo/value_loss": (metrics.value_loss),
@@ -729,18 +785,28 @@ async def train(
                     "ppo/clip_fraction": (metrics.clip_fraction),
                     "ppo/mean_value": (metrics.mean_value),
                     "ppo/mean_return": (metrics.mean_return),
-                    "optimizer/learning_rate": (optimizer.param_groups[0]["lr"]),
-                    "reward/total": sum(item.total for item in reward_breakdowns)
+                    "optimizer/learning_rate": (
+                        optimizer.param_groups[0]["lr"]
+                    ),
+                    "reward/total": sum(
+                        item.total for item in reward_breakdowns
+                    )
                     / battle_count,
-                    "reward/outcome": sum(item.outcome for item in reward_breakdowns)
+                    "reward/outcome": sum(
+                        item.outcome for item in reward_breakdowns
+                    )
                     / battle_count,
-                    "reward/own_hp": sum(item.own_hp for item in reward_breakdowns)
+                    "reward/own_hp": sum(
+                        item.own_hp for item in reward_breakdowns
+                    )
                     / battle_count,
                     "reward/enemy_damage": sum(
                         item.enemy_damage for item in reward_breakdowns
                     )
                     / battle_count,
-                    "reward/speed": sum(item.speed for item in reward_breakdowns)
+                    "reward/speed": sum(
+                        item.speed for item in reward_breakdowns
+                    )
                     / battle_count,
                     "battle/own_hp_fraction": sum(
                         item.own_hp_fraction for item in reward_breakdowns
@@ -761,7 +827,11 @@ async def train(
 
                     evaluation_start = perf_counter()
 
-                    (eval_wins, eval_losses, eval_ties) = await evaluate_multiprocess(
+                    (
+                        eval_wins,
+                        eval_losses,
+                        eval_ties,
+                    ) = await evaluate_multiprocess(
                         pool=pool,
                         model=model,
                         url=running_config.url,
@@ -805,14 +875,15 @@ async def train(
                             "eval/best_win_rate": (best_eval_win_rate),
                             "eval/seconds": (evaluation_seconds),
                             "eval/battles_per_second": (
-                                training_config.eval_battles / evaluation_seconds
+                                training_config.eval_battles
+                                / evaluation_seconds
                             ),
                         }
                     )
 
                     checkpoint = (
                         running_config.checkpoint_dir
-                        / args.wandb_name
+                        / (args.wandb_name or "local")
                         / (f"iteration_{iteration:05d}.pt")
                     )
 
@@ -852,7 +923,9 @@ async def train(
             wandb_run.finish()
 
 
-def apply_overrides(config, overrides: list[str], types: dict[str, type]) -> None:
+def apply_overrides(
+    config, overrides: list[str], types: dict[str, type]
+) -> None:
     for override in overrides:
         key, value = override.split("=", 1)
 
@@ -892,80 +965,14 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
 
     if args.wandb_name is None and not args.no_wandb:
-        raise ValueError("--wandb-name must be set unless --no-wandb flag is active")
+        raise ValueError(
+            "--wandb-name must be set unless --no-wandb flag is active"
+        )
 
     return args
 
 
 async def main() -> None:
-    PPO_TYPES = {
-        "learning_rate": float,
-        "clip_epsilon": float,
-        "value_coef": float,
-        "entropy_coef": float,
-        "max_grad_norm": float,
-        "epochs": int,
-        "minibatch_size": int,
-        "kl_target": float,
-    }
-    TRAINING_TYPES = {
-        "iterations": int,
-        "rollout_battles": int,
-        "eval_battles": int,
-        "eval_interval": int,
-        "team_seed": int,
-    }
-
-    REWARD_TYPES = {
-        "outcome_weight": float,
-        "own_hp_weight": float,
-        "enemy_hp_weight": float,
-        "speed_weight": float,
-        "speed_scale": float,
-    }
-
-    RUNNING_TYPES = {
-        "url": str,
-        "format": str,
-        "workers": int,
-        "threads": int,
-        "checkpoint_dir": Path,
-        "wandb_project": str,
-        "wandb_entity": str,
-    }
-    MODEL_TYPES = {
-        "species_count": int,
-        "form_count": int,
-        "move_count": int,
-        "item_count": int,
-        "ability_count": int,
-        "status_count": int,
-        "weather_count": int,
-        "tactical_event_type_count": int,
-        "history_ref_count": int,
-        "history_reason_count": int,
-        "species_embedding_dim": int,
-        "form_embedding_dim": int,
-        "move_embedding_dim": int,
-        "item_embedding_dim": int,
-        "ability_embedding_dim": int,
-        "status_embedding_dim": int,
-        "weather_embedding_dim": int,
-        "event_type_embedding_dim": int,
-        "history_ref_embedding_dim": int,
-        "history_reason_embedding_dim": int,
-        "pokemon_hidden_dim": int,
-        "pokemon_output_dim": int,
-        "field_hidden_dim": int,
-        "field_output_dim": int,
-        "tactical_entry_hidden_dim": int,
-        "tactical_entry_output_dim": int,
-        "history_hidden_dim": int,
-        "trunk_hidden_dim": int,
-        "trunk_output_dim": int,
-        "action_count": int,
-        "seed": int,
-    }
 
     ppo_config = copy(PPO_CONFIG)
     training_config = copy(TRAINING_CONFIG)

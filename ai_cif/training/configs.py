@@ -11,7 +11,7 @@ class TrainingConfig:
     team_seed: int
 
 
-@dataclass(frozen=True)
+@dataclass
 class RunningConfig:
     url: str
     format: str

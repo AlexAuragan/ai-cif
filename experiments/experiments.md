@@ -56,3 +56,12 @@ I'm used Supervised Learning, where a training loop, if not deterministic, at le
 One can't help be wonder, are these paths close to each other, or can one model find the right strategy that will lead it to victory where another with the same configuration can fail to see ? 
 
 To answer this, we will run the same training with variation in the randomness seed and nothing more. I will take our best model (HP) up to 300 iterations with random seeds and see if we can see variations their training.
+
+# Going to GPU
+Once back home from my holidays, I finally got access at my home desktop with its dedicated GPU, which I didn't have for the first part of the experiment. Optimizing for the GPU is something I have never done, but step by step we can find out where is the bottleneck and how can we fix it. 
+
+## Removing multithreading
+Multithreading was really usefull when everything was on CPU with many cores, but we want our GPU to only have one process/context. When GPU is enable we see performance improvement going back to one thread with many workers. 
+
+## Batching
+On GPU, we can compute the tensors for multiple observations at the same time, instead of applying one trajectory at the time, we can apply a batch of 32/64

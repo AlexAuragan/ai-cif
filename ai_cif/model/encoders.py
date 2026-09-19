@@ -61,7 +61,9 @@ class PokemonEncoder(nn.Module):
     ) -> Tensor:
         batch_size = species.shape[0]
 
-        side = torch.tensor([0] * 6 + [1] * 6, dtype=torch.long, device=species.device)
+        side = torch.tensor(
+            [0] * 6 + [1] * 6, dtype=torch.long, device=species.device
+        )
         side = side.unsqueeze(0).expand(batch_size, -1)
 
         base_species_emb = self.species_embedding(base_species)
@@ -113,7 +115,9 @@ class SimplifiedHistoryEncoder(nn.Module):
             config.form_count, config.form_embedding_dim, padding_idx=0
         )
         self.ref_embedding = nn.Embedding(
-            config.history_ref_count, config.history_ref_embedding_dim, padding_idx=0
+            config.history_ref_count,
+            config.history_ref_embedding_dim,
+            padding_idx=0,
         )
         self.reason_embedding = nn.Embedding(
             config.history_reason_count,
@@ -135,7 +139,8 @@ class SimplifiedHistoryEncoder(nn.Module):
             nn.Linear(input_dim, config.tactical_entry_hidden_dim),
             nn.ReLU(),
             nn.Linear(
-                config.tactical_entry_hidden_dim, config.tactical_entry_output_dim
+                config.tactical_entry_hidden_dim,
+                config.tactical_entry_output_dim,
             ),
             nn.ReLU(),
         )

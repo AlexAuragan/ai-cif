@@ -2,7 +2,11 @@ import torch
 from torch import Tensor, nn
 
 from ai_cif.model.config import ModelConfig
-from ai_cif.model.encoders import FieldEncoder, PokemonEncoder, SimplifiedHistoryEncoder
+from ai_cif.model.encoders import (
+    FieldEncoder,
+    PokemonEncoder,
+    SimplifiedHistoryEncoder,
+)
 from ai_cif.vectorization.tensorizer import (
     CANT_REASON_VOCAB_SIZE,
     FIELD_NUMERIC_DIM,
@@ -29,7 +33,9 @@ class BattleModel(nn.Module):
 
         self.config = config
 
-        self.pokemon_encoder = PokemonEncoder(config, pokemon_numeric_feature_count)
+        self.pokemon_encoder = PokemonEncoder(
+            config, pokemon_numeric_feature_count
+        )
 
         self.field_encoder = FieldEncoder(config, field_numeric_feature_count)
 
@@ -50,7 +56,9 @@ class BattleModel(nn.Module):
             nn.ReLU(),
         )
 
-        self.policy_head = nn.Linear(config.trunk_output_dim, config.action_count)
+        self.policy_head = nn.Linear(
+            config.trunk_output_dim, config.action_count
+        )
 
         self.value_head = nn.Sequential(
             nn.Linear(config.trunk_output_dim, 1), nn.Tanh()
@@ -102,7 +110,10 @@ class BattleModel(nn.Module):
 
 
 def create_battle_model(
-    *, device: str | torch.device = "cpu", max_history: int = 32, vocab_gen: int = 4
+    *,
+    device: str | torch.device = "cpu",
+    max_history: int = 32,
+    vocab_gen: int = 4,
 ) -> tuple[BattleModel, BattleTensorizer]:
     tensorizer = BattleTensorizer(max_history=max_history, vocab_gen=vocab_gen)
 

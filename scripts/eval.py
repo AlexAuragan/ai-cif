@@ -19,7 +19,9 @@ from showdown_sdk.classes.combat_handler import (
 )
 from showdown_sdk.exceptions import BattleLifecycleError
 from showdown_sdk.models.sdk import SampleTeamGenerator
-from showdown_sdk.models.sdk.team_generators.team_generator import BaseTeamGenerator
+from showdown_sdk.models.sdk.team_generators.team_generator import (
+    BaseTeamGenerator,
+)
 from tqdm import tqdm
 
 from ai_cif.inference.combat_handler import NeuralCombatHandler
@@ -100,7 +102,9 @@ def discover_participants(models_dir: Path) -> list[Participant]:
                 f"{checkpoint} uses reserved model name '{checkpoint.stem}'"
             )
 
-        participants.append(Participant(name=checkpoint.stem, checkpoint=checkpoint))
+        participants.append(
+            Participant(name=checkpoint.stem, checkpoint=checkpoint)
+        )
 
     return participants
 
@@ -108,9 +112,13 @@ def discover_participants(models_dir: Path) -> list[Participant]:
 def load_neural_handler(checkpoint_path: str) -> NeuralCombatHandler:
     device = torch.device("cpu")
 
-    model, tensorizer = create_battle_model(device=device, max_history=32, vocab_gen=4)
+    model, tensorizer = create_battle_model(
+        device=device, max_history=32, vocab_gen=4
+    )
 
-    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    checkpoint = torch.load(
+        checkpoint_path, map_location=device, weights_only=False
+    )
 
     if not isinstance(checkpoint, dict):
         raise TypeError(f"Checkpoint {checkpoint_path!r} must contain a dict")
@@ -121,12 +129,16 @@ def load_neural_handler(checkpoint_path: str) -> NeuralCombatHandler:
         model_state = checkpoint
 
     if not isinstance(model_state, dict):
-        raise TypeError(f"Checkpoint {checkpoint_path!r} has invalid model state")
+        raise TypeError(
+            f"Checkpoint {checkpoint_path!r} has invalid model state"
+        )
 
     model.load_state_dict(model_state)
     model.eval()
 
-    return NeuralCombatHandler(model=model, tensorizer=tensorizer, device=device)
+    return NeuralCombatHandler(
+        model=model, tensorizer=tensorizer, device=device
+    )
 
 
 def create_handler(checkpoint_path: str):
@@ -213,7 +225,9 @@ async def run_pair_worker_async(
                     team_generator_2=team_generator_2,
                 )
             except BattleLifecycleError as error:
-                print(f"Discarding failed evaluation battle and retrying: {error!r}")
+                print(
+                    f"Discarding failed evaluation battle and retrying: {error!r}"
+                )
 
                 await asyncio.gather(
                     client_1.close(), client_2.close(), return_exceptions=True
@@ -256,7 +270,9 @@ async def run_pair_worker_async(
         )
 
     finally:
-        await asyncio.gather(client_1.close(), client_2.close(), return_exceptions=True)
+        await asyncio.gather(
+            client_1.close(), client_2.close(), return_exceptions=True
+        )
 
 
 def run_pair_worker(
@@ -355,7 +371,9 @@ def read_scores(path: Path) -> dict[tuple[str, str, str], dict[str, str]]:
         if reader.fieldnames is None:
             return {}
 
-        missing = [column for column in CSV_COLUMNS if column not in reader.fieldnames]
+        missing = [
+            column for column in CSV_COLUMNS if column not in reader.fieldnames
+        ]
 
         if missing:
             raise ValueError(f"{path} is missing CSV columns: {missing}")
@@ -369,7 +387,9 @@ def read_scores(path: Path) -> dict[tuple[str, str, str], dict[str, str]]:
         return rows
 
 
-def write_scores(path: Path, rows: dict[tuple[str, str, str], dict[str, str]]) -> None:
+def write_scores(
+    path: Path, rows: dict[tuple[str, str, str], dict[str, str]]
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
     with path.open("w", newline="") as file:
@@ -406,7 +426,8 @@ async def evaluate_all(args: argparse.Namespace) -> None:
     print(f"Models directory: {models_dir}")
     print(f"Scores CSV: {scores_path}")
     print(
-        "Participants: " + ", ".join(participant.name for participant in participants)
+        "Participants: "
+        + ", ".join(participant.name for participant in participants)
     )
     print(f"Pairs including self-play: {len(pairs)}")
     print(f"Target battles per pair: {args.battles}")

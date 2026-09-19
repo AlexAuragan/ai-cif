@@ -16,11 +16,17 @@ def print_metrics(metrics: PPOMetrics) -> None:
 
 
 def print_initial_metrics(
-    wins: int, losses: int, ties: int, eval_battles: int, evaluation_seconds: float
+    wins: int,
+    losses: int,
+    ties: int,
+    eval_battles: int,
+    evaluation_seconds: float,
 ):
     initial_win_rate = wins / eval_battles
 
-    print(f"wins={wins} losses={losses} ties={ties} win_rate={initial_win_rate:.1%}")
+    print(
+        f"wins={wins} losses={losses} ties={ties} win_rate={initial_win_rate:.1%}"
+    )
 
     print(
         f"evaluation_time="

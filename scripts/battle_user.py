@@ -22,7 +22,9 @@ def load_bot() -> NeuralCombatHandler:
 
     model = create_model(device, MODEL_CONFIG)
 
-    checkpoint = torch.load(CHECKPOINT_PATH, map_location=device, weights_only=False)
+    checkpoint = torch.load(
+        CHECKPOINT_PATH, map_location=device, weights_only=False
+    )
 
     model.load_state_dict(checkpoint["model"])
     model.eval()

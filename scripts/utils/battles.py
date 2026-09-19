@@ -3,7 +3,9 @@ import asyncio
 from showdown_sdk.classes.client import Client
 from showdown_sdk.classes.dt import BattleResult
 from showdown_sdk.models.sdk import TeamSet, print_reproduction_teams
-from showdown_sdk.models.sdk.team_generators.team_generator import BaseTeamGenerator
+from showdown_sdk.models.sdk.team_generators.team_generator import (
+    BaseTeamGenerator,
+)
 
 
 def outcome_for(result: BattleResult, username: str) -> float:
@@ -47,7 +49,9 @@ async def run_battle(
     team_generator_1: BaseTeamGenerator | None,
     team_generator_2: BaseTeamGenerator | None,
 ) -> tuple[BattleResult, BattleResult]:
-    await asyncio.gather(client_1.ensure_connected(), client_2.ensure_connected())
+    await asyncio.gather(
+        client_1.ensure_connected(), client_2.ensure_connected()
+    )
 
     if client_1.username is None:
         raise RuntimeError("Client 1 is not logged in")
@@ -71,10 +75,16 @@ async def run_battle(
             client_2.battle_manager.room_ready.wait(),
         )
 
-        battle_waiter_1 = asyncio.create_task(client_1.wait_for_battle_end(timeout=300))
-        battle_waiter_2 = asyncio.create_task(client_2.wait_for_battle_end(timeout=300))
+        battle_waiter_1 = asyncio.create_task(
+            client_1.wait_for_battle_end(timeout=300)
+        )
+        battle_waiter_2 = asyncio.create_task(
+            client_2.wait_for_battle_end(timeout=300)
+        )
 
-        result_1, result_2 = await asyncio.gather(battle_waiter_1, battle_waiter_2)
+        result_1, result_2 = await asyncio.gather(
+            battle_waiter_1, battle_waiter_2
+        )
 
         return result_1, result_2
 

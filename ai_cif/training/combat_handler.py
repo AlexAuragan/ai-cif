@@ -4,7 +4,12 @@ import torch
 from showdown_sdk.features import battle_to_features
 from showdown_sdk.models.sdk import BattleState
 
-from ai_cif.inference.combat_handler import Action, NeuralCombatHandler
+from ai_cif.inference.combat_handler import (
+    Action,
+    AsyncInferenceFn,
+    AsyncNeuralCombatHandler,
+    NeuralCombatHandler,
+)
 from ai_cif.model.model import BattleModel
 from ai_cif.training.rewards import RewardBreakdown
 from ai_cif.training.trajectory import Decision, Trajectory
@@ -66,7 +71,9 @@ class TrainingCombatHandler(NeuralCombatHandler):
             )
 
         if value.shape != (1,):
-            raise RuntimeError(f"Expected value shape (1,), got {tuple(value.shape)}")
+            raise RuntimeError(
+                f"Expected value shape (1,), got {tuple(value.shape)}"
+            )
 
         legal_mask = batch.action_mask[0]
         legal_indices = torch.where(legal_mask)[0]
@@ -104,6 +111,82 @@ class TrainingCombatHandler(NeuralCombatHandler):
 
         if remaining_indices.numel() > 0:
             remaining_scores = logits[0, remaining_indices]
+
+            order = torch.argsort(remaining_scores, descending=True)
+
+            remaining_indices = remaining_indices[order]
+
+        ranked_indices = [
+            action_index,
+            *[int(index.item()) for index in remaining_indices],
+        ]
+
+        return [self._decode_action(index) for index in ranked_indices]
+
+
+class AsyncTrainingCombatHandler(AsyncNeuralCombatHandler):
+    def __init__(
+        self, tensorizer: BattleTensorizer, infer: AsyncInferenceFn
+    ) -> None:
+        super().__init__(tensorizer=tensorizer, infer=infer)
+
+        self.trajectory = Trajectory()
+
+    def start_battle(self) -> None:
+        self.trajectory = Trajectory()
+
+    def finish_battle(
+        self, outcome: float, reward_breakdown: RewardBreakdown
+    ) -> Trajectory:
+        reward = reward_breakdown.total
+
+        if outcome not in {-1.0, 0.0, 1.0}:
+            raise ValueError(f"Outcome must be -1, 0, or +1, got {outcome}")
+
+        if not -1.0 <= reward <= 1.0:
+            raise ValueError(f"Reward must be in [-1, 1], got {reward}")
+
+        self.trajectory.outcome = outcome
+        self.trajectory.reward = reward
+        self.trajectory.reward_breakdown = reward_breakdown
+
+        return self.trajectory
+
+    @override
+    async def async_select_top_actions(
+        self, battle_state: BattleState
+    ) -> list[Action]:
+        tensors, logits, value = await self._infer(battle_state)
+
+        legal_indices = torch.where(tensors.action_mask)[0]
+
+        if legal_indices.numel() == 0:
+            raise RuntimeError("Model received a state with no legal actions")
+
+        legal_logits = logits[legal_indices]
+
+        distribution = torch.distributions.Categorical(logits=legal_logits)
+
+        sampled_position = distribution.sample()
+        sampled_index = legal_indices[sampled_position]
+
+        log_prob = distribution.log_prob(sampled_position)
+
+        action_index = int(sampled_index.item())
+
+        self.trajectory.decisions.append(
+            Decision(
+                observation=tensors,
+                action=action_index,
+                log_prob=float(log_prob.item()),
+                value=value,
+            )
+        )
+
+        remaining_indices = legal_indices[legal_indices != sampled_index]
+
+        if remaining_indices.numel() > 0:
+            remaining_scores = logits[remaining_indices]
 
             order = torch.argsort(remaining_scores, descending=True)
 

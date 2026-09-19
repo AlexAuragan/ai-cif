@@ -1,12 +1,16 @@
+from collections.abc import Awaitable, Callable
 from typing import override
 
 import torch
-from showdown_sdk.classes.combat_handler.base_handler import BaseCombatHandler
+from showdown_sdk.classes.combat_handler.base_handler import (
+    AsyncBaseCombatHandler,
+    BaseCombatHandler,
+)
 from showdown_sdk.features import battle_to_features
 from showdown_sdk.models.sdk import BattleState
 
 from ai_cif.model.model import BattleModel
-from ai_cif.vectorization.tensorizer import BattleTensorizer
+from ai_cif.vectorization.tensorizer import BattleTensorizer, BattleTensors
 
 Action = tuple[str, int]
 
@@ -90,13 +94,17 @@ class NeuralCombatHandler(BaseCombatHandler):
             selected_index = int(ranked_indices[0].item())
 
             if selected_index < 4:
-                selected_name = battle_state.available_moves[selected_index].name
+                selected_name = battle_state.available_moves[
+                    selected_index
+                ].name
                 print(f"Selected: MOVE {selected_name}")
             else:
                 pokemon = battle_state.team[selected_index - 4]
                 print(f"Selected: SWITCH {pokemon.id}")
 
-        return [self._decode_action(int(index.item())) for index in ranked_indices]
+        return [
+            self._decode_action(int(index.item())) for index in ranked_indices
+        ]
 
     @staticmethod
     def _decode_action(index: int) -> Action:
@@ -110,7 +118,69 @@ class NeuralCombatHandler(BaseCombatHandler):
 
         raise ValueError(f"Invalid action index: {index}")
 
+    @classmethod
+    @override
+    def select_team_order(cls) -> list[int]:
+        return [1, 2, 3, 4, 5, 6]
+
+
+type AsyncInferenceFn = Callable[
+    [BattleTensors], Awaitable[tuple[torch.Tensor, float]]
+]
+
+
+class AsyncNeuralCombatHandler(AsyncBaseCombatHandler):
+    def __init__(
+        self, tensorizer: BattleTensorizer, infer: AsyncInferenceFn
+    ) -> None:
+        self.tensorizer = tensorizer
+        self.infer = infer
+
+    async def _infer(
+        self, battle_state: BattleState
+    ) -> tuple[BattleTensors, torch.Tensor, float]:
+        features = battle_to_features(battle_state)
+        tensors = self.tensorizer.tensorize(features)
+
+        logits, value = await self.infer(tensors)
+
+        if logits.shape != (10,):
+            raise RuntimeError(
+                f"Expected logits shape (10,), got {tuple(logits.shape)}"
+            )
+
+        return tensors, logits, value
+
+    @override
+    async def async_select_top_actions(
+        self, battle_state: BattleState
+    ) -> list[Action]:
+        tensors, logits, _ = await self._infer(battle_state)
+
+        legal_indices = torch.where(tensors.action_mask)[0]
+
+        if legal_indices.numel() == 0:
+            raise RuntimeError("Model received a state with no legal actions")
+
+        scores = logits[legal_indices]
+        ranking = torch.argsort(scores, descending=True)
+        ranked_indices = legal_indices[ranking]
+
+        return [
+            self._decode_action(int(index.item())) for index in ranked_indices
+        ]
+
     @staticmethod
     @override
-    def select_team_order() -> list[int]:
+    async def async_select_team_order() -> list[int]:
         return [1, 2, 3, 4, 5, 6]
+
+    @staticmethod
+    def _decode_action(index: int) -> Action:
+        if 0 <= index < 4:
+            return ("move", index + 1)
+
+        if 4 <= index < 10:
+            return ("switch", index - 3)
+
+        raise ValueError(f"Invalid action index: {index}")

@@ -50,7 +50,9 @@ def ppo_update(
     device: torch.device,
 ) -> PPOMetrics:
     decisions = [
-        decision for trajectory in trajectories for decision in trajectory.decisions
+        decision
+        for trajectory in trajectories
+        for decision in trajectory.decisions
     ]
 
     if not decisions:
@@ -147,12 +149,16 @@ def ppo_update(
                 early_stop = True
                 break
 
-            clip_fraction = ((ratio - 1.0).abs() > config.clip_epsilon).float().mean()
+            clip_fraction = (
+                ((ratio - 1.0).abs() > config.clip_epsilon).float().mean()
+            )
 
             unclipped = ratio * batch_advantages
 
             clipped = (
-                torch.clamp(ratio, 1.0 - config.clip_epsilon, 1.0 + config.clip_epsilon)
+                torch.clamp(
+                    ratio, 1.0 - config.clip_epsilon, 1.0 + config.clip_epsilon
+                )
                 * batch_advantages
             )
 
@@ -169,7 +175,9 @@ def ppo_update(
             optimizer.zero_grad()
             total_loss.backward()
 
-            torch.nn.utils.clip_grad_norm_(model.parameters(), config.max_grad_norm)
+            torch.nn.utils.clip_grad_norm_(
+                model.parameters(), config.max_grad_norm
+            )
 
             optimizer.step()
 

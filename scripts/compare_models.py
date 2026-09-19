@@ -1,5 +1,4 @@
 import asyncio
-import anyio
 import gzip
 import json
 import multiprocessing
@@ -11,13 +10,16 @@ from itertools import combinations
 from pathlib import Path
 from typing import IO, Any
 
+import anyio
 import torch
 from showdown_sdk.classes.client import Client
 from showdown_sdk.classes.combat_handler import SimpleHeuristicsCombatHandler
 from showdown_sdk.exceptions import BattleLifecycleError
 from showdown_sdk.features import FEATURE_SCHEMA_VERSION, battle_to_features
 from showdown_sdk.models.sdk import BattleState, SampleTeamGenerator
-from showdown_sdk.models.sdk.team_generators.team_generator import BaseTeamGenerator
+from showdown_sdk.models.sdk.team_generators.team_generator import (
+    BaseTeamGenerator,
+)
 
 from ai_cif.model.model import BattleModel, create_battle_model
 from ai_cif.vectorization.tensorizer import (
@@ -53,8 +55,7 @@ class RecordingSimpleHeuristicsCombatHandler(SimpleHeuristicsCombatHandler):
         self.battle_id = -1
         self.records: list[dict[str, object]] = []
         self.tensorizer = BattleTensorizer(
-            max_history=DEFAULT_MAX_HISTORY,
-            vocab_gen=DEFAULT_VOCAB_GEN,
+            max_history=DEFAULT_MAX_HISTORY, vocab_gen=DEFAULT_VOCAB_GEN
         )
 
     def start_battle(self, battle_id: int) -> None:
@@ -148,9 +149,15 @@ def _tensors_from_json(data: dict[str, object]) -> BattleTensors:
         species_ids=torch.tensor(
             _require_list(data, "species_ids"), dtype=torch.long
         ),
-        form_ids=torch.tensor(_require_list(data, "form_ids"), dtype=torch.long),
-        move_ids=torch.tensor(_require_list(data, "move_ids"), dtype=torch.long),
-        item_ids=torch.tensor(_require_list(data, "item_ids"), dtype=torch.long),
+        form_ids=torch.tensor(
+            _require_list(data, "form_ids"), dtype=torch.long
+        ),
+        move_ids=torch.tensor(
+            _require_list(data, "move_ids"), dtype=torch.long
+        ),
+        item_ids=torch.tensor(
+            _require_list(data, "item_ids"), dtype=torch.long
+        ),
         ability_ids=torch.tensor(
             _require_list(data, "ability_ids"), dtype=torch.long
         ),
@@ -163,7 +170,9 @@ def _tensors_from_json(data: dict[str, object]) -> BattleTensors:
         pokemon_mask=torch.tensor(
             _require_list(data, "pokemon_mask"), dtype=torch.bool
         ),
-        weather_id=torch.tensor(_require_int(data, "weather_id"), dtype=torch.long),
+        weather_id=torch.tensor(
+            _require_int(data, "weather_id"), dtype=torch.long
+        ),
         field_numeric=torch.tensor(
             _require_list(data, "field_numeric"), dtype=torch.float32
         ),
@@ -205,7 +214,7 @@ def _tensors_from_json(data: dict[str, object]) -> BattleTensors:
 
 def _open_text(path: Path, mode: str) -> IO[str]:
     if path.suffix == ".gz":
-        return gzip.open(path, mode, encoding="utf-8") # type:ignore
+        return gzip.open(path, mode, encoding="utf-8")  # type:ignore
     return path.open(mode, encoding="utf-8")
 
 
@@ -262,11 +271,12 @@ async def _collect_worker_async(
                     )
                 except BattleLifecycleError as error:
                     print(
-                        "Discarding failed comparison battle and retrying: "
-                        f"{error!r}"
+                        f"Discarding failed comparison battle and retrying: {error!r}"
                     )
                     await asyncio.gather(
-                        client_1.close(), client_2.close(), return_exceptions=True
+                        client_1.close(),
+                        client_2.close(),
+                        return_exceptions=True,
                     )
                     await asyncio.gather(
                         client_1.ensure_connected(), client_2.ensure_connected()
@@ -276,14 +286,16 @@ async def _collect_worker_async(
                 records = handler_1.take_records() + handler_2.take_records()
                 records.sort(
                     key=lambda record: (
-                        int(record["turn"]), # type: ignore
+                        int(record["turn"]),  # type: ignore
                         str(record["side"]),
-                        int(record["decision_index"]), # type: ignore
+                        int(record["decision_index"]),  # type: ignore
                     )
                 )
 
                 for record in records:
-                    await output.write(json.dumps(record, separators=(",", ":")))
+                    await output.write(
+                        json.dumps(record, separators=(",", ":"))
+                    )
                     await output.write("\n")
 
                 state_count += len(records)
@@ -413,7 +425,9 @@ def collect_battle_states(
             first_state = True
 
             for result in results:
-                with Path(result.path).open("r", encoding="utf-8") as worker_file:
+                with Path(result.path).open(
+                    "r", encoding="utf-8"
+                ) as worker_file:
                     for line in worker_file:
                         stripped = line.strip()
                         if not stripped:
@@ -597,7 +611,7 @@ def compare_models(
         raise ValueError("State bank contains no observations")
 
     heuristic_actions = torch.tensor(
-        [int(state["heuristic_action"]) for state in state_metadata], # type:ignore
+        [int(state["heuristic_action"]) for state in state_metadata],  # type:ignore
         dtype=torch.long,
     )
 
@@ -610,10 +624,7 @@ def compare_models(
         print(f"Evaluating {name} on {len(observations):,} states")
         model = _load_model(path, torch_device)
         probabilities, values, entropy, confidence = _infer_model(
-            model,
-            observations,
-            device=torch_device,
-            batch_size=batch_size,
+            model, observations, device=torch_device, batch_size=batch_size
         )
         actions = probabilities.argmax(dim=-1)
 
@@ -722,10 +733,9 @@ def compare_models(
             json.dump(report, output, indent=2)
         print(f"Saved comparison report to {destination}")
 
-
     print()
     print("Pairwise comparison")
-    for pair in report["pairs"]: # type: ignore
+    for pair in report["pairs"]:  # type: ignore
         if not isinstance(pair, dict):
             raise TypeError("Invalid pair result")
         print(
@@ -734,6 +744,7 @@ def compare_models(
             f"JS={float(pair['mean_js_divergence_nats']):.4f}"
         )
     return report
+
 
 if __name__ == "__main__":
     # collect_battle_states(

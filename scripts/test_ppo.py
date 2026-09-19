@@ -65,7 +65,9 @@ async def run_battle(
     fmt: str,
     team_generator: SampleTeamGenerator | None,
 ) -> tuple[BattleResult, BattleResult]:
-    await asyncio.gather(client_1.ensure_connected(), client_2.ensure_connected())
+    await asyncio.gather(
+        client_1.ensure_connected(), client_2.ensure_connected()
+    )
 
     if client_1.username is None or client_2.username is None:
         raise RuntimeError("Both clients must be logged in")
@@ -140,7 +142,9 @@ async def main() -> None:
     try:
         await asyncio.gather(neural_client.connect(), random_client.connect())
 
-        await asyncio.gather(neural_client.login("BOT1"), random_client.login("BOT2"))
+        await asyncio.gather(
+            neural_client.login("BOT1"), random_client.login("BOT2")
+        )
 
         print()
         print("Collecting trajectories")
@@ -150,7 +154,10 @@ async def main() -> None:
             training_handler.start_battle()
 
             result, _ = await run_battle(
-                neural_client, random_client, fmt=FORMAT, team_generator=team_generator
+                neural_client,
+                random_client,
+                fmt=FORMAT,
+                team_generator=team_generator,
             )
 
             if neural_client.username is None:

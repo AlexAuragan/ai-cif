@@ -14,7 +14,11 @@ def snapshot_model(model: BattleModel) -> dict[str, torch.Tensor]:
 
 
 def save_checkpoint(
-    *, path: Path, model: BattleModel, optimizer: torch.optim.Optimizer, iteration: int
+    *,
+    path: Path,
+    model: BattleModel,
+    optimizer: torch.optim.Optimizer,
+    iteration: int,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 

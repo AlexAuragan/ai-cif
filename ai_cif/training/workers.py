@@ -2,7 +2,9 @@ from dataclasses import dataclass
 
 import torch
 from showdown_sdk.classes.client import Client
-from showdown_sdk.classes.combat_handler.random_handler import RandomMoveCombatHandler
+from showdown_sdk.classes.combat_handler.random_handler import (
+    RandomMoveCombatHandler,
+)
 from showdown_sdk.models.sdk import SampleTeamGenerator
 
 from ai_cif.inference.combat_handler import NeuralCombatHandler
@@ -63,4 +65,6 @@ def split_battles(battles: int, worker_count: int) -> list[int]:
     base = battles // worker_count
     remainder = battles % worker_count
 
-    return [base + (1 if index < remainder else 0) for index in range(worker_count)]
+    return [
+        base + (1 if index < remainder else 0) for index in range(worker_count)
+    ]
