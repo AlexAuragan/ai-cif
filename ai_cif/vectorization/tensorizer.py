@@ -359,6 +359,110 @@ class BattleBatch:
             action_mask=self.action_mask.to(device),
         )
 
+    @property
+    def batch_size(self) -> int:
+        return int(self.base_species_ids.shape[0])
+
+    def index_select(self, indices: Tensor) -> BattleBatch:
+        if indices.ndim != 1:
+            raise ValueError("BattleBatch indices must be 1-D")
+
+        if indices.dtype != torch.long:
+            raise TypeError("BattleBatch indices must use torch.long dtype")
+
+        return BattleBatch(
+            base_species_ids=self.base_species_ids.index_select(0, indices),
+            species_ids=self.species_ids.index_select(0, indices),
+            form_ids=self.form_ids.index_select(0, indices),
+            move_ids=self.move_ids.index_select(0, indices),
+            item_ids=self.item_ids.index_select(0, indices),
+            ability_ids=self.ability_ids.index_select(0, indices),
+            status_ids=self.status_ids.index_select(0, indices),
+            pokemon_numeric=self.pokemon_numeric.index_select(0, indices),
+            pokemon_mask=self.pokemon_mask.index_select(0, indices),
+            weather_id=self.weather_id.index_select(0, indices),
+            field_numeric=self.field_numeric.index_select(0, indices),
+            history_kind=self.history_kind.index_select(0, indices),
+            history_move=self.history_move.index_select(0, indices),
+            history_species=self.history_species.index_select(0, indices),
+            history_form=self.history_form.index_select(0, indices),
+            history_actor=self.history_actor.index_select(0, indices),
+            history_target=self.history_target.index_select(0, indices),
+            history_reason=self.history_reason.index_select(0, indices),
+            history_numeric=self.history_numeric.index_select(0, indices),
+            history_mask=self.history_mask.index_select(0, indices),
+            history_length=self.history_length.index_select(0, indices),
+            action_mask=self.action_mask.index_select(0, indices),
+        )
+
+    @classmethod
+    def cat(cls, batches: list[BattleBatch]) -> BattleBatch:
+        if not batches:
+            raise ValueError("Cannot concatenate an empty BattleBatch list")
+
+        return cls(
+            base_species_ids=torch.cat(
+                [batch.base_species_ids for batch in batches], dim=0
+            ),
+            species_ids=torch.cat(
+                [batch.species_ids for batch in batches], dim=0
+            ),
+            form_ids=torch.cat([batch.form_ids for batch in batches], dim=0),
+            move_ids=torch.cat([batch.move_ids for batch in batches], dim=0),
+            item_ids=torch.cat([batch.item_ids for batch in batches], dim=0),
+            ability_ids=torch.cat(
+                [batch.ability_ids for batch in batches], dim=0
+            ),
+            status_ids=torch.cat(
+                [batch.status_ids for batch in batches], dim=0
+            ),
+            pokemon_numeric=torch.cat(
+                [batch.pokemon_numeric for batch in batches], dim=0
+            ),
+            pokemon_mask=torch.cat(
+                [batch.pokemon_mask for batch in batches], dim=0
+            ),
+            weather_id=torch.cat(
+                [batch.weather_id for batch in batches], dim=0
+            ),
+            field_numeric=torch.cat(
+                [batch.field_numeric for batch in batches], dim=0
+            ),
+            history_kind=torch.cat(
+                [batch.history_kind for batch in batches], dim=0
+            ),
+            history_move=torch.cat(
+                [batch.history_move for batch in batches], dim=0
+            ),
+            history_species=torch.cat(
+                [batch.history_species for batch in batches], dim=0
+            ),
+            history_form=torch.cat(
+                [batch.history_form for batch in batches], dim=0
+            ),
+            history_actor=torch.cat(
+                [batch.history_actor for batch in batches], dim=0
+            ),
+            history_target=torch.cat(
+                [batch.history_target for batch in batches], dim=0
+            ),
+            history_reason=torch.cat(
+                [batch.history_reason for batch in batches], dim=0
+            ),
+            history_numeric=torch.cat(
+                [batch.history_numeric for batch in batches], dim=0
+            ),
+            history_mask=torch.cat(
+                [batch.history_mask for batch in batches], dim=0
+            ),
+            history_length=torch.cat(
+                [batch.history_length for batch in batches], dim=0
+            ),
+            action_mask=torch.cat(
+                [batch.action_mask for batch in batches], dim=0
+            ),
+        )
+
     def model_kwargs(self) -> dict[str, Tensor]:
         """Keyword arguments for a model whose forward() follows this schema."""
 

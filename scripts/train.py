@@ -101,6 +101,7 @@ RUNNING_CONFIG = RunningConfig(
     checkpoint_dir=Path("checkpoints"),
     wandb_project="ai-cif",
     wandb_entity=None,
+    battle_lanes=8,
 )
 
 TENSORIZER = BattleTensorizer(max_history=32, vocab_gen=4)

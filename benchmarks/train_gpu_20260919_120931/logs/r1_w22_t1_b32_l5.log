@@ -1,0 +1,181 @@
+Training device: cuda
+Rollout inference: cuda (central async batched broker)
+Rollout processes: 22
+Battle lanes per process: 5
+Max rollout battles in flight: 100
+PyTorch threads per rollout process: 1
+GPU inference max batch: 32
+GPU inference batch wait: 0.000 ms
+Model parameters: 429,011
+
+Initial evaluation
+------------------
+wins=24 losses=26 ties=0 win_rate=48.0%
+evaluation_time=7.52s battles/s=6.64
+gpu_inference requests=2127 batches=390 mean_batch=5.45 max_batch=32 batch_wait=0.044s gather=0.061s gpu_roundtrip=1.878s dispatch=0.171s
+rollout_profile lanes=100 decisions=4512 setup=302.03ms/lane battle=2537.73ms/battle
+decision_profile feature=3.207ms tensorize=4.898ms action=0.665ms shared_write=0.125ms queue_put=0.026ms inference_wait=27.939ms other_battle=19.384ms
+
+Sat Sep 19 11:09:30 2026
+iteration=1 battles=100 decisions=4512
+train wins=8 losses=92 ties=0
+rollout_time=5.90s battles/s=16.96 decisions/s=765.2
+ppo_time=2.19s
+gpu_inference requests=4512 batches=560 mean_batch=8.06 max_batch=32 batch_wait=0.095s gather=0.113s gpu_roundtrip=2.764s dispatch=0.484s
+policy=-0.0056 value=0.0184 entropy=1.6871 kl=0.00447 clip=0.026
+mean_value=+0.013 mean_return=+0.324
+rollout_profile lanes=100 decisions=4527 setup=325.68ms/lane battle=2251.06ms/battle
+decision_profile feature=2.848ms tensorize=4.135ms action=0.593ms shared_write=0.111ms queue_put=0.023ms inference_wait=23.559ms other_battle=18.455ms
+
+Sat Sep 19 11:09:37 2026
+iteration=2 battles=100 decisions=4527
+train wins=11 losses=89 ties=0
+rollout_time=5.52s battles/s=18.10 decisions/s=819.5
+ppo_time=1.30s
+gpu_inference requests=4527 batches=572 mean_batch=7.91 max_batch=32 batch_wait=0.083s gather=0.113s gpu_roundtrip=2.548s dispatch=0.457s
+policy=-0.0068 value=0.0114 entropy=1.6830 kl=0.00510 clip=0.035
+mean_value=+0.319 mean_return=+0.351
+rollout_profile lanes=100 decisions=4745 setup=299.51ms/lane battle=4251.87ms/battle
+decision_profile feature=2.360ms tensorize=3.446ms action=0.501ms shared_write=0.092ms queue_put=0.019ms inference_wait=17.440ms other_battle=65.749ms
+
+Sat Sep 19 11:09:47 2026
+iteration=3 battles=100 decisions=4745
+train wins=12 losses=88 ties=0
+rollout_time=9.05s battles/s=11.05 decisions/s=524.3
+ppo_time=1.37s
+gpu_inference requests=4745 batches=738 mean_batch=6.43 max_batch=32 batch_wait=0.079s gather=0.110s gpu_roundtrip=2.864s dispatch=0.396s
+policy=-0.0097 value=0.0075 entropy=1.6573 kl=0.00544 clip=0.051
+mean_value=+0.353 mean_return=+0.361
+rollout_profile lanes=100 decisions=4468 setup=372.89ms/lane battle=2330.82ms/battle
+decision_profile feature=3.011ms tensorize=4.402ms action=0.610ms shared_write=0.113ms queue_put=0.022ms inference_wait=25.088ms other_battle=18.921ms
+
+Sat Sep 19 11:09:54 2026
+iteration=4 battles=100 decisions=4468
+train wins=22 losses=78 ties=0
+rollout_time=5.45s battles/s=18.34 decisions/s=819.6
+ppo_time=1.30s
+gpu_inference requests=4468 batches=536 mean_batch=8.34 max_batch=32 batch_wait=0.093s gather=0.107s gpu_roundtrip=2.513s dispatch=0.460s
+policy=-0.0139 value=0.0117 entropy=1.6746 kl=0.00675 clip=0.079
+mean_value=+0.337 mean_return=+0.390
+rollout_profile lanes=100 decisions=4728 setup=316.61ms/lane battle=2540.35ms/battle
+decision_profile feature=3.230ms tensorize=4.466ms action=0.615ms shared_write=0.111ms queue_put=0.022ms inference_wait=26.421ms other_battle=18.865ms
+
+Sat Sep 19 11:10:02 2026
+iteration=5 battles=100 decisions=4728
+train wins=24 losses=76 ties=0
+rollout_time=6.17s battles/s=16.22 decisions/s=766.8
+ppo_time=1.38s
+gpu_inference requests=4728 batches=657 mean_batch=7.20 max_batch=32 batch_wait=0.100s gather=0.121s gpu_roundtrip=2.978s dispatch=0.468s
+policy=-0.0103 value=0.0100 entropy=1.6005 kl=0.00646 clip=0.069
+mean_value=+0.382 mean_return=+0.405
+rollout_profile lanes=100 decisions=4482 setup=300.90ms/lane battle=2448.72ms/battle
+decision_profile feature=3.171ms tensorize=4.567ms action=0.642ms shared_write=0.115ms queue_put=0.023ms inference_wait=25.405ms other_battle=20.712ms
+
+Sat Sep 19 11:10:09 2026
+iteration=6 battles=100 decisions=4482
+train wins=36 losses=63 ties=1
+rollout_time=6.00s battles/s=16.67 decisions/s=747.2
+ppo_time=1.29s
+gpu_inference requests=4482 batches=593 mean_batch=7.56 max_batch=32 batch_wait=0.090s gather=0.114s gpu_roundtrip=2.753s dispatch=0.510s
+policy=-0.0147 value=0.0110 entropy=1.5680 kl=0.00650 clip=0.073
+mean_value=+0.411 mean_return=+0.458
+rollout_profile lanes=100 decisions=4620 setup=587.13ms/lane battle=3738.52ms/battle
+decision_profile feature=2.622ms tensorize=3.702ms action=0.529ms shared_write=0.098ms queue_put=0.020ms inference_wait=21.027ms other_battle=52.921ms
+
+Sat Sep 19 11:10:18 2026
+iteration=7 battles=100 decisions=4620
+train wins=34 losses=66 ties=0
+rollout_time=7.36s battles/s=13.59 decisions/s=628.1
+ppo_time=1.36s
+gpu_inference requests=4620 batches=643 mean_batch=7.19 max_batch=32 batch_wait=0.078s gather=0.111s gpu_roundtrip=2.700s dispatch=0.395s
+policy=-0.0062 value=0.0118 entropy=1.5501 kl=0.00686 clip=0.086
+mean_value=+0.468 mean_return=+0.454
+rollout_profile lanes=100 decisions=4370 setup=330.81ms/lane battle=2395.50ms/battle
+decision_profile feature=3.143ms tensorize=4.591ms action=0.623ms shared_write=0.116ms queue_put=0.024ms inference_wait=25.159ms other_battle=21.161ms
+
+Sat Sep 19 11:10:25 2026
+iteration=8 battles=100 decisions=4370
+train wins=35 losses=60 ties=5
+rollout_time=5.72s battles/s=17.49 decisions/s=764.1
+ppo_time=1.28s
+gpu_inference requests=4370 batches=570 mean_batch=7.67 max_batch=32 batch_wait=0.092s gather=0.104s gpu_roundtrip=2.618s dispatch=0.483s
+policy=-0.0061 value=0.0139 entropy=1.5286 kl=0.00669 clip=0.083
+mean_value=+0.488 mean_return=+0.435
+rollout_profile lanes=100 decisions=4596 setup=309.29ms/lane battle=2479.44ms/battle
+decision_profile feature=3.129ms tensorize=4.384ms action=0.617ms shared_write=0.112ms queue_put=0.020ms inference_wait=26.834ms other_battle=18.851ms
+
+Sat Sep 19 11:10:33 2026
+iteration=9 battles=100 decisions=4596
+train wins=46 losses=53 ties=1
+rollout_time=6.76s battles/s=14.80 decisions/s=680.2
+ppo_time=1.31s
+gpu_inference requests=4596 batches=664 mean_batch=6.92 max_batch=32 batch_wait=0.085s gather=0.121s gpu_roundtrip=2.921s dispatch=0.437s
+policy=-0.0163 value=0.0128 entropy=1.4975 kl=0.00761 clip=0.098
+mean_value=+0.431 mean_return=+0.459
+rollout_profile lanes=100 decisions=4476 setup=324.75ms/lane battle=2324.00ms/battle
+decision_profile feature=3.039ms tensorize=4.389ms action=0.601ms shared_write=0.114ms queue_put=0.024ms inference_wait=24.089ms other_battle=19.666ms
+
+Sat Sep 19 11:10:39 2026
+iteration=10 battles=100 decisions=4476
+train wins=42 losses=56 ties=2
+rollout_time=5.40s battles/s=18.53 decisions/s=829.5
+ppo_time=1.31s
+gpu_inference requests=4476 batches=541 mean_batch=8.27 max_batch=32 batch_wait=0.088s gather=0.113s gpu_roundtrip=2.580s dispatch=0.438s
+policy=-0.0218 value=0.0104 entropy=1.4921 kl=0.00830 clip=0.117
+mean_value=+0.474 mean_return=+0.470
+rollout_profile lanes=100 decisions=4360 setup=307.08ms/lane battle=2345.43ms/battle
+decision_profile feature=3.229ms tensorize=4.630ms action=0.621ms shared_write=0.115ms queue_put=0.023ms inference_wait=24.676ms other_battle=20.501ms
+
+Sat Sep 19 11:10:46 2026
+iteration=11 battles=100 decisions=4360
+train wins=45 losses=54 ties=1
+rollout_time=5.84s battles/s=17.13 decisions/s=746.7
+ppo_time=1.28s
+gpu_inference requests=4360 batches=555 mean_batch=7.86 max_batch=32 batch_wait=0.092s gather=0.104s gpu_roundtrip=2.622s dispatch=0.464s
+policy=-0.0216 value=0.0139 entropy=1.4737 kl=0.00916 clip=0.134
+mean_value=+0.447 mean_return=+0.494
+rollout_profile lanes=100 decisions=4358 setup=316.45ms/lane battle=2225.62ms/battle
+decision_profile feature=3.077ms tensorize=4.379ms action=0.623ms shared_write=0.112ms queue_put=0.023ms inference_wait=23.207ms other_battle=19.649ms
+
+Sat Sep 19 11:10:54 2026
+iteration=12 battles=100 decisions=4358
+train wins=49 losses=51 ties=0
+rollout_time=6.42s battles/s=15.57 decisions/s=678.3
+ppo_time=1.28s
+gpu_inference requests=4358 batches=634 mean_batch=6.87 max_batch=32 batch_wait=0.086s gather=0.125s gpu_roundtrip=2.757s dispatch=0.481s
+policy=-0.0015 value=0.0128 entropy=1.4651 kl=0.00806 clip=0.113
+mean_value=+0.513 mean_return=+0.487
+rollout_profile lanes=100 decisions=4438 setup=311.64ms/lane battle=2279.48ms/battle
+decision_profile feature=3.155ms tensorize=4.452ms action=0.607ms shared_write=0.111ms queue_put=0.023ms inference_wait=23.039ms other_battle=19.975ms
+
+Sat Sep 19 11:11:01 2026
+iteration=13 battles=100 decisions=4438
+train wins=50 losses=49 ties=1
+rollout_time=5.89s battles/s=16.99 decisions/s=754.0
+ppo_time=1.29s
+gpu_inference requests=4438 batches=622 mean_batch=7.14 max_batch=32 batch_wait=0.082s gather=0.116s gpu_roundtrip=2.769s dispatch=0.432s
+policy=-0.0236 value=0.0125 entropy=1.4417 kl=0.00792 clip=0.111
+mean_value=+0.490 mean_return=+0.492
+rollout_profile lanes=100 decisions=4275 setup=309.16ms/lane battle=2277.04ms/battle
+decision_profile feature=3.091ms tensorize=4.505ms action=0.618ms shared_write=0.114ms queue_put=0.024ms inference_wait=25.511ms other_battle=19.401ms
+
+Sat Sep 19 11:11:09 2026
+iteration=14 battles=100 decisions=4275
+train wins=45 losses=53 ties=2
+rollout_time=6.19s battles/s=16.15 decisions/s=690.4
+ppo_time=1.24s
+gpu_inference requests=4275 batches=604 mean_batch=7.08 max_batch=32 batch_wait=0.089s gather=0.116s gpu_roundtrip=2.677s dispatch=0.456s
+policy=-0.0178 value=0.0124 entropy=1.4070 kl=0.00868 clip=0.126
+mean_value=+0.513 mean_return=+0.479
+rollout_profile lanes=100 decisions=4543 setup=326.42ms/lane battle=2442.29ms/battle
+decision_profile feature=3.139ms tensorize=4.448ms action=0.611ms shared_write=0.113ms queue_put=0.024ms inference_wait=27.048ms other_battle=18.376ms
+
+Sat Sep 19 11:11:16 2026
+iteration=15 battles=100 decisions=4543
+train wins=40 losses=60 ties=0
+rollout_time=6.19s battles/s=16.16 decisions/s=734.3
+ppo_time=1.32s
+gpu_inference requests=4543 batches=587 mean_batch=7.74 max_batch=32 batch_wait=0.090s gather=0.109s gpu_roundtrip=2.703s dispatch=0.437s
+policy=-0.0184 value=0.0142 entropy=1.4103 kl=0.00862 clip=0.122
+mean_value=+0.528 mean_return=+0.472
+took 124.02597097100079

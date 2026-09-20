@@ -1,4 +1,3 @@
-
 import argparse
 import asyncio
 import multiprocessing
@@ -6,7 +5,7 @@ import os
 import tempfile
 from concurrent.futures import ProcessPoolExecutor
 from copy import copy
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -14,19 +13,25 @@ from time import perf_counter
 from typing import override
 
 import torch
-import wandb
 from dotenv import load_dotenv
 from showdown_sdk.classes.client import Client
 from showdown_sdk.classes.combat_handler import RandomMoveCombatHandler
-from showdown_sdk.classes.combat_handler.base_handler import AsyncBaseCombatHandler
+from showdown_sdk.classes.combat_handler.base_handler import (
+    AsyncBaseCombatHandler,
+)
 from showdown_sdk.classes.combat_handler.utils import Action
-from showdown_sdk.exceptions import BattleLifecycleError
+from showdown_sdk.exceptions import (
+    BattleLifecycleError,
+    BattleReproductionError,
+    SDKTimeoutError,
+)
 from showdown_sdk.features import battle_to_features
 from showdown_sdk.models.sdk import BattleState, SampleTeamGenerator
 from showdown_sdk.models.sdk.team_generators.team_generator import (
     BaseTeamGenerator,
 )
 
+import wandb
 from ai_cif.model.config import ModelConfig
 from ai_cif.model.model import BattleModel
 from ai_cif.training.configs import RunningConfig, TrainingConfig
@@ -34,6 +39,7 @@ from ai_cif.training.ppo import PPOConfig, ppo_update
 from ai_cif.training.rewards import RewardBreakdown, RewardConfig, breakdown_for
 from ai_cif.training.trajectory import (
     Decision,
+    PackedRollout,
     Trajectory,
     mean_trajectory_reward,
     summarize_trajectories,
@@ -51,13 +57,20 @@ from ai_cif.vectorization.tensorizer import (
     BattleTensors,
 )
 from scripts.utils.battles import outcome_for, run_battle
-from scripts.utils.config import MODEL_TYPES, PPO_TYPES, REWARD_TYPES, RUNNING_TYPES, TRAINING_TYPES
+from scripts.utils.config import (
+    MODEL_TYPES,
+    PPO_TYPES,
+    REWARD_TYPES,
+    RUNNING_TYPES,
+    TRAINING_TYPES,
+)
 from scripts.utils.gpu import (
     AsyncInferenceFn,
     BatchedGpuInferenceBroker,
     GpuInferenceStats,
     PendingInference,
     SharedBattleBuffer,
+    WorkerInferenceStats,
     gpu_worker_initializer,
     make_remote_infer,
     response_pump,
@@ -66,6 +79,7 @@ from scripts.utils.gpu import (
 from scripts.utils.metrics import print_initial_metrics, print_metrics
 from scripts.utils.model import save_checkpoint
 from scripts.utils.multithreading import split_battles
+from scripts.utils.temp import BattleTiming, summarize_rollout_tail
 
 load_dotenv()
 
@@ -75,9 +89,9 @@ DEFAULT_WEBSOCKET_URL = (
 )
 
 REWARD_CONFIG = RewardConfig(
-    outcome_weight=0.0,
-    own_hp_weight=0.5,
-    enemy_hp_weight=0.5,
+    outcome_weight=0.2,
+    own_hp_weight=0.4,
+    enemy_hp_weight=0.4,
     speed_weight=0.0,
     speed_scale=40.0,
 )
@@ -88,7 +102,7 @@ PPO_CONFIG = PPOConfig(
     value_coef=0.5,
     entropy_coef=0.01,
     max_grad_norm=0.5,
-    epochs=4,
+    epochs=2,
     minibatch_size=256,
     kl_target=0.02,
     kl_ratio_threshold=None,
@@ -96,8 +110,8 @@ PPO_CONFIG = PPOConfig(
 
 TRAINING_CONFIG = TrainingConfig(
     iterations=200,
-    rollout_battles=100,
-    eval_battles=200,
+    rollout_battles=1000,
+    eval_battles=400,
     eval_interval=10,
     team_seed=42,
 )
@@ -105,11 +119,14 @@ TRAINING_CONFIG = TrainingConfig(
 RUNNING_CONFIG = RunningConfig(
     url=DEFAULT_WEBSOCKET_URL,
     format="gen1randombattle",
-    workers=8,
-    threads=1,
+    workers=20,
+    threads=2,
     checkpoint_dir=Path("checkpoints"),
     wandb_project="ai-cif",
     wandb_entity=None,
+    battle_lanes=10,
+    gpu_batch_size=32,
+    gpu_batch_wait_ms=0.5,
 )
 
 TENSORIZER = BattleTensorizer(max_history=32, vocab_gen=4)
@@ -142,6 +159,22 @@ def create_model(
     return model
 
 
+@dataclass
+class RolloutProfile:
+    decisions: int = 0
+    battles: int = 0
+    lanes: int = 0
+
+    setup_seconds: float = 0.0
+    battle_seconds: float = 0.0
+
+    feature_seconds: float = 0.0
+    tensorize_seconds: float = 0.0
+    action_seconds: float = 0.0
+
+    battle_timings: list[BattleTiming] = field(default_factory=list)
+
+
 class AsyncNeuralCombatHandler(AsyncBaseCombatHandler):
     """Generic async neural policy.
 
@@ -154,16 +187,24 @@ class AsyncNeuralCombatHandler(AsyncBaseCombatHandler):
         *,
         tensorizer: BattleTensorizer,
         infer: AsyncInferenceFn,
+        profile: RolloutProfile | None = None,
     ) -> None:
         self.tensorizer = tensorizer
         self.infer = infer
+        self.profile = profile
 
     async def _infer(
-        self,
-        battle_state: BattleState,
+        self, battle_state: BattleState
     ) -> tuple[BattleTensors, torch.Tensor, float]:
+        start = perf_counter()
         features = battle_to_features(battle_state)
+        features_done = perf_counter()
         tensors = self.tensorizer.tensorize(features)
+        tensorize_done = perf_counter()
+        if self.profile is not None:
+            self.profile.feature_seconds += features_done - start
+            self.profile.tensorize_seconds += tensorize_done - features_done
+
         logits, value = await self.infer(tensors)
 
         if logits.shape != (10,):
@@ -175,10 +216,10 @@ class AsyncNeuralCombatHandler(AsyncBaseCombatHandler):
 
     @override
     async def async_select_top_actions(
-        self,
-        battle_state: BattleState,
+        self, battle_state: BattleState
     ) -> list[Action]:
         tensors, logits, _ = await self._infer(battle_state)
+        action_start = perf_counter()
 
         legal_indices = torch.where(tensors.action_mask)[0]
 
@@ -189,10 +230,13 @@ class AsyncNeuralCombatHandler(AsyncBaseCombatHandler):
         ranking = torch.argsort(scores, descending=True)
         ranked_indices = legal_indices[ranking]
 
-        return [
-            self._decode_action(int(index.item()))
-            for index in ranked_indices
-        ]
+        actions = [self._decode_action(int(index)) for index in ranked_indices]
+
+        if self.profile is not None:
+            self.profile.decisions += 1
+            self.profile.action_seconds += perf_counter() - action_start
+
+        return actions
 
     @staticmethod
     @override
@@ -218,24 +262,21 @@ class AsyncTrainingCombatHandler(AsyncNeuralCombatHandler):
         *,
         tensorizer: BattleTensorizer,
         infer: AsyncInferenceFn,
+        profile: RolloutProfile | None = None,
     ) -> None:
-        super().__init__(tensorizer=tensorizer, infer=infer)
+        super().__init__(tensorizer=tensorizer, infer=infer, profile=profile)
         self.trajectory = Trajectory()
 
     def start_battle(self) -> None:
         self.trajectory = Trajectory()
 
     def finish_battle(
-        self,
-        outcome: float,
-        reward_breakdown: RewardBreakdown,
+        self, outcome: float, reward_breakdown: RewardBreakdown
     ) -> Trajectory:
         reward = reward_breakdown.total
 
         if outcome not in {-1.0, 0.0, 1.0}:
-            raise ValueError(
-                f"Outcome must be -1, 0, or +1, got {outcome}"
-            )
+            raise ValueError(f"Outcome must be -1, 0, or +1, got {outcome}")
 
         if not -1.0 <= reward <= 1.0:
             raise ValueError(f"Reward must be in [-1, 1], got {reward}")
@@ -247,10 +288,11 @@ class AsyncTrainingCombatHandler(AsyncNeuralCombatHandler):
 
     @override
     async def async_select_top_actions(
-        self,
-        battle_state: BattleState,
+        self, battle_state: BattleState
     ) -> list[Action]:
         tensors, logits, value = await self._infer(battle_state)
+
+        action_start = perf_counter()
 
         legal_indices = torch.where(tensors.action_mask)[0]
 
@@ -258,11 +300,13 @@ class AsyncTrainingCombatHandler(AsyncNeuralCombatHandler):
             raise RuntimeError("Model received a state with no legal actions")
 
         legal_logits = logits[legal_indices]
+
         distribution = torch.distributions.Categorical(logits=legal_logits)
 
         sampled_position = distribution.sample()
         sampled_index = legal_indices[sampled_position]
         log_prob = distribution.log_prob(sampled_position)
+
         action_index = int(sampled_index.item())
 
         self.trajectory.decisions.append(
@@ -278,7 +322,9 @@ class AsyncTrainingCombatHandler(AsyncNeuralCombatHandler):
 
         if remaining_indices.numel() > 0:
             remaining_scores = logits[remaining_indices]
+
             order = torch.argsort(remaining_scores, descending=True)
+
             remaining_indices = remaining_indices[order]
 
         ranked_indices = [
@@ -286,21 +332,26 @@ class AsyncTrainingCombatHandler(AsyncNeuralCombatHandler):
             *[int(index.item()) for index in remaining_indices],
         ]
 
-        return [self._decode_action(index) for index in ranked_indices]
+        actions = [self._decode_action(index) for index in ranked_indices]
+
+        if self.profile is not None:
+            self.profile.decisions += 1
+            self.profile.action_seconds += perf_counter() - action_start
+
+        return actions
 
 
-def print_gpu_inference_stats(
-    label: str,
-    stats: GpuInferenceStats,
-) -> None:
+def print_gpu_inference_stats(label: str, stats: GpuInferenceStats) -> None:
     print(
         f"{label} "
         f"requests={stats.requests} "
         f"batches={stats.batches} "
         f"mean_batch={stats.mean_batch_size:.2f} "
         f"max_batch={stats.max_batch_size} "
-        f"inference_time={stats.total_inference_seconds:.3f}s "
-        f"requests/inference_s={stats.requests_per_inference_second:.1f}"
+        f"batch_wait={stats.total_batch_wait_seconds:.3f}s "
+        f"gather={stats.total_gather_seconds:.3f}s "
+        f"gpu_roundtrip={stats.total_inference_seconds:.3f}s "
+        f"dispatch={stats.total_dispatch_seconds:.3f}s"
     )
 
 
@@ -319,10 +370,13 @@ async def collect_trajectories(
         raise RuntimeError("Neural client has no username")
 
     neural_client.combat_handler = handler
+
     trajectories: list[Trajectory] = []
+    discarded_battles = 0
 
     while len(trajectories) < battles:
         handler.start_battle()
+        battle_start = perf_counter()
 
         try:
             result, _ = await run_battle(
@@ -332,8 +386,19 @@ async def collect_trajectories(
                 team_generator_1=team_generator_1,
                 team_generator_2=team_generator_2,
             )
-        except BattleLifecycleError as error:
-            print(f"Discarding failed battle and retrying: {error!r}")
+
+        except (
+            BattleLifecycleError,
+            BattleReproductionError,
+            SDKTimeoutError,
+            RuntimeError,
+        ) as error:
+            discarded_battles += 1
+
+            print(
+                "Discarding failed battle and retrying: "
+                f"{type(error).__name__}: {error}"
+            )
 
             await asyncio.gather(
                 neural_client.close(),
@@ -345,16 +410,29 @@ async def collect_trajectories(
                 neural_client.ensure_connected(),
                 random_client.ensure_connected(),
             )
+
             continue
 
+        if handler.profile is not None:
+            handler.profile.battles += 1
+            handler.profile.battle_seconds += perf_counter() - battle_start
+
         outcome = outcome_for(result, neural_client.username)
+
         breakdown = breakdown_for(result, outcome, config=reward_config)
+
         trajectory = handler.finish_battle(outcome, breakdown)
 
         if not trajectory.decisions:
             raise RuntimeError("Collected empty trajectory")
 
         trajectories.append(trajectory)
+
+    if discarded_battles > 0:
+        print(
+            f"Discarded {discarded_battles} failed battles "
+            f"while collecting {battles} trajectories"
+        )
 
     return trajectories
 
@@ -400,11 +478,7 @@ async def evaluate(
 
 
 def _team_generators(
-    *,
-    fmt: str,
-    team_seed: int,
-    phase_id: int,
-    slot_index: int,
+    *, fmt: str, team_seed: int, phase_id: int, slot_index: int
 ) -> tuple[SampleTeamGenerator | None, SampleTeamGenerator | None]:
     if "randombattle" in fmt:
         return None, None
@@ -426,17 +500,19 @@ async def _rollout_lane(
     reward_config: RewardConfig,
     tensorizer: BattleTensorizer,
     pending: PendingInference,
+    profile: RolloutProfile,
+    inference_stats: WorkerInferenceStats,
 ) -> list[Trajectory]:
     slot_index = worker_index * battle_lanes + lane_index
     infer = make_remote_infer(
         worker_index=worker_index,
         slot_index=slot_index,
         pending=pending,
+        stats=inference_stats,
     )
 
     handler = AsyncTrainingCombatHandler(
-        tensorizer=tensorizer,
-        infer=infer,
+        tensorizer=tensorizer, infer=infer, profile=profile
     )
 
     neural_client = Client(url, combat_handler=handler)
@@ -446,21 +522,22 @@ async def _rollout_lane(
     random_client.log_manager.disable()
 
     team_generator_1, team_generator_2 = _team_generators(
-        fmt=fmt,
-        team_seed=team_seed,
-        phase_id=phase_id,
-        slot_index=slot_index,
+        fmt=fmt, team_seed=team_seed, phase_id=phase_id, slot_index=slot_index
     )
 
     neural_name = f"A{phase_id}N{slot_index}"
     random_name = f"A{phase_id}R{slot_index}"
 
     try:
+        setup_start = perf_counter()
+
         await asyncio.gather(neural_client.connect(), random_client.connect())
+
         await asyncio.gather(
-            neural_client.login(neural_name),
-            random_client.login(random_name),
+            neural_client.login(neural_name), random_client.login(random_name)
         )
+
+        profile.setup_seconds += perf_counter() - setup_start
 
         return await collect_trajectories(
             neural_client=neural_client,
@@ -475,9 +552,7 @@ async def _rollout_lane(
 
     finally:
         await asyncio.gather(
-            neural_client.close(),
-            random_client.close(),
-            return_exceptions=True,
+            neural_client.close(), random_client.close(), return_exceptions=True
         )
 
 
@@ -493,9 +568,16 @@ async def _rollout_worker_async(
     output_path: str,
     reward_config: RewardConfig,
     tensorizer: BattleTensorizer,
-) -> str:
+) -> tuple[str, dict, dict]:
     lane_counts = split_battles(battles, battle_lanes)
+
     pending: PendingInference = {}
+
+    profile = RolloutProfile()
+    profile.lanes = sum(count > 0 for count in lane_counts)
+
+    inference_stats = WorkerInferenceStats()
+
     pump_task = asyncio.create_task(
         response_pump(worker_index=worker_index, pending=pending)
     )
@@ -504,17 +586,19 @@ async def _rollout_worker_async(
         tasks = [
             asyncio.create_task(
                 _rollout_lane(
-                url=url,
-                fmt=fmt,
-                team_seed=team_seed,
-                battles=count,
-                worker_index=worker_index,
-                lane_index=lane_index,
-                battle_lanes=battle_lanes,
-                phase_id=phase_id,
-                reward_config=reward_config,
-                tensorizer=tensorizer,
-                pending=pending,
+                    url=url,
+                    fmt=fmt,
+                    team_seed=team_seed,
+                    battles=count,
+                    worker_index=worker_index,
+                    lane_index=lane_index,
+                    battle_lanes=battle_lanes,
+                    phase_id=phase_id,
+                    reward_config=reward_config,
+                    tensorizer=tensorizer,
+                    pending=pending,
+                    profile=profile,
+                    inference_stats=inference_stats,
                 )
             )
             for lane_index, count in enumerate(lane_counts)
@@ -527,24 +611,55 @@ async def _rollout_worker_async(
             for task in tasks:
                 if not task.done():
                     task.cancel()
+
             await asyncio.gather(*tasks, return_exceptions=True)
+
             raise
-        trajectories = [
-            trajectory
-            for chunk in chunks
-            for trajectory in chunk
-        ]
+
+        trajectories = [trajectory for chunk in chunks for trajectory in chunk]
 
         if pending:
             raise RuntimeError(
-                f"Worker {worker_index} finished with pending inference requests"
+                f"Worker {worker_index} finished with "
+                f"{len(pending)} pending inference requests"
             )
 
-        torch.save(trajectories, output_path)
-        return output_path
+        # Convert the large Python object graph into a small number
+        # of batched tensors before crossing the process boundary.
+        pack_start = perf_counter()
+
+        rollout = PackedRollout.from_trajectories(trajectories)
+
+        pack_seconds = perf_counter() - pack_start
+
+        # The original Decision/BattleTensors objects are no longer
+        # required after packing.
+        del trajectories
+        del chunks
+
+        save_start = perf_counter()
+
+        torch.save(rollout, output_path)
+
+        save_seconds = perf_counter() - save_start
+
+        file_size_mb = Path(output_path).stat().st_size / (1024 * 1024)
+
+        print(
+            f"worker_save "
+            f"worker={worker_index} "
+            f"battles={rollout.battle_count} "
+            f"decisions={rollout.decision_count} "
+            f"pack={pack_seconds:.3f}s "
+            f"save={save_seconds:.3f}s "
+            f"size={file_size_mb:.1f}MB"
+        )
+
+        return (output_path, asdict(profile), asdict(inference_stats))
 
     finally:
         stop_response_pump(worker_index)
+
         await pump_task
 
 
@@ -559,7 +674,7 @@ def _rollout_worker(
     output_path: str,
     reward_config: RewardConfig,
     tensorizer: BattleTensorizer,
-) -> str:
+) -> tuple[str, dict[str, int | float], dict[str, int | float]]:
     return asyncio.run(
         _rollout_worker_async(
             url=url,
@@ -591,15 +706,10 @@ async def _evaluation_lane(
 ) -> tuple[int, int, int]:
     slot_index = worker_index * battle_lanes + lane_index
     infer = make_remote_infer(
-        worker_index=worker_index,
-        slot_index=slot_index,
-        pending=pending,
+        worker_index=worker_index, slot_index=slot_index, pending=pending
     )
 
-    handler = AsyncNeuralCombatHandler(
-        tensorizer=tensorizer,
-        infer=infer,
-    )
+    handler = AsyncNeuralCombatHandler(tensorizer=tensorizer, infer=infer)
 
     neural_client = Client(url, combat_handler=handler)
     random_client = Client(url, combat_handler=RandomMoveCombatHandler())
@@ -608,10 +718,7 @@ async def _evaluation_lane(
     random_client.log_manager.disable()
 
     team_generator_1, team_generator_2 = _team_generators(
-        fmt=fmt,
-        team_seed=team_seed,
-        phase_id=phase_id,
-        slot_index=slot_index,
+        fmt=fmt, team_seed=team_seed, phase_id=phase_id, slot_index=slot_index
     )
 
     neural_name = f"A{phase_id}N{slot_index}"
@@ -620,8 +727,7 @@ async def _evaluation_lane(
     try:
         await asyncio.gather(neural_client.connect(), random_client.connect())
         await asyncio.gather(
-            neural_client.login(neural_name),
-            random_client.login(random_name),
+            neural_client.login(neural_name), random_client.login(random_name)
         )
 
         return await evaluate(
@@ -636,9 +742,7 @@ async def _evaluation_lane(
 
     finally:
         await asyncio.gather(
-            neural_client.close(),
-            random_client.close(),
-            return_exceptions=True,
+            neural_client.close(), random_client.close(), return_exceptions=True
         )
 
 
@@ -663,16 +767,16 @@ async def _evaluation_worker_async(
         tasks = [
             asyncio.create_task(
                 _evaluation_lane(
-                url=url,
-                fmt=fmt,
-                team_seed=team_seed,
-                battles=count,
-                worker_index=worker_index,
-                lane_index=lane_index,
-                battle_lanes=battle_lanes,
-                phase_id=phase_id,
-                tensorizer=tensorizer,
-                pending=pending,
+                    url=url,
+                    fmt=fmt,
+                    team_seed=team_seed,
+                    battles=count,
+                    worker_index=worker_index,
+                    lane_index=lane_index,
+                    battle_lanes=battle_lanes,
+                    phase_id=phase_id,
+                    tensorizer=tensorizer,
+                    pending=pending,
                 )
             )
             for lane_index, count in enumerate(lane_counts)
@@ -740,8 +844,9 @@ async def collect_trajectories_multiprocess(
     temporary_directory: Path,
     reward_config: RewardConfig,
     tensorizer: BattleTensorizer,
-) -> list[Trajectory]:
+) -> PackedRollout:
     counts = split_battles(battles, worker_count)
+
     loop = asyncio.get_running_loop()
     tasks = []
 
@@ -749,9 +854,8 @@ async def collect_trajectories_multiprocess(
         if count <= 0:
             continue
 
-        output_path = (
-            temporary_directory
-            / f"phase_{phase_id:05d}_worker_{worker_index:03d}.pt"
+        output_path = temporary_directory / (
+            f"phase_{phase_id:05d}_worker_{worker_index:03d}.pt"
         )
 
         tasks.append(
@@ -773,32 +877,165 @@ async def collect_trajectories_multiprocess(
             )
         )
 
-    output_paths = await asyncio.gather(*tasks)
-    trajectories: list[Trajectory] = []
+    worker_results = await asyncio.gather(*tasks)
+
+    output_paths: list[str] = []
+    profiles: list[dict] = []
+    inference_profiles: list[dict] = []
+
+    for output_path, profile, inference_profile in worker_results:
+        output_paths.append(output_path)
+        profiles.append(profile)
+        inference_profiles.append(inference_profile)
+
+    rollout_chunks: list[PackedRollout] = []
+
+    total_load_seconds = 0.0
+    total_file_mb = 0.0
 
     for output_path_string in output_paths:
         output_path = Path(output_path_string)
-        worker_trajectories = torch.load(
-            output_path,
-            map_location="cpu",
-            weights_only=False,
+
+        file_size_mb = output_path.stat().st_size / (1024 * 1024)
+
+        load_start = perf_counter()
+
+        worker_rollout = torch.load(
+            output_path, map_location="cpu", weights_only=False
         )
 
-        if not isinstance(worker_trajectories, list):
-            raise TypeError(
-                "Rollout worker returned a non-list trajectory chunk"
-            )
+        load_seconds = perf_counter() - load_start
 
-        for trajectory in worker_trajectories:
-            if not isinstance(trajectory, Trajectory):
-                raise TypeError(
-                    "Rollout worker returned an invalid trajectory object"
-                )
+        total_load_seconds += load_seconds
 
-        trajectories.extend(worker_trajectories)
+        total_file_mb += file_size_mb
+
+        if not isinstance(worker_rollout, PackedRollout):
+            raise TypeError("Rollout worker returned an invalid packed rollout")
+
+        rollout_chunks.append(worker_rollout)
+
         output_path.unlink()
 
-    return trajectories
+    concat_start = perf_counter()
+
+    rollout = PackedRollout.concat(rollout_chunks)
+
+    concat_seconds = perf_counter() - concat_start
+
+    del rollout_chunks
+
+    ## Aggregate rollout profiling
+    decisions = sum(profile["decisions"] for profile in profiles)
+
+    completed_battles = sum(profile["battles"] for profile in profiles)
+
+    lanes = sum(profile["lanes"] for profile in profiles)
+
+    setup_seconds = sum(profile["setup_seconds"] for profile in profiles)
+
+    battle_seconds = sum(profile["battle_seconds"] for profile in profiles)
+
+    feature_seconds = sum(profile["feature_seconds"] for profile in profiles)
+
+    tensorize_seconds = sum(
+        profile["tensorize_seconds"] for profile in profiles
+    )
+
+    action_seconds = sum(profile["action_seconds"] for profile in profiles)
+
+    inference_requests = sum(
+        profile["requests"] for profile in inference_profiles
+    )
+
+    shared_write_seconds = sum(
+        profile["shared_write_seconds"] for profile in inference_profiles
+    )
+
+    queue_put_seconds = sum(
+        profile["queue_put_seconds"] for profile in inference_profiles
+    )
+
+    response_wait_seconds = sum(
+        profile["response_wait_seconds"] for profile in inference_profiles
+    )
+
+    if inference_requests != decisions:
+        print(
+            "WARNING: profiling request/decision mismatch: "
+            f"decisions={decisions} "
+            f"inference_requests={inference_requests}"
+        )
+
+    if rollout.decision_count != decisions:
+        print(
+            "WARNING: packed rollout decision mismatch: "
+            f"profiled={decisions} "
+            f"packed={rollout.decision_count}"
+        )
+
+    if rollout.battle_count != completed_battles:
+        print(
+            "WARNING: packed rollout battle mismatch: "
+            f"profiled={completed_battles} "
+            f"packed={rollout.battle_count}"
+        )
+
+    def ms_per(seconds: float, count: int) -> float:
+        if count <= 0:
+            return 0.0
+
+        return seconds * 1000.0 / count
+
+    other_battle_seconds = (
+        battle_seconds
+        - feature_seconds
+        - tensorize_seconds
+        - action_seconds
+        - shared_write_seconds
+        - queue_put_seconds
+        - response_wait_seconds
+    )
+
+    print(
+        "rollout_profile "
+        f"lanes={lanes} "
+        f"decisions={decisions} "
+        f"setup={ms_per(setup_seconds, lanes):.2f}ms/lane "
+        f"battle="
+        f"{ms_per(battle_seconds, completed_battles):.2f}ms/battle"
+    )
+
+    print(
+        "decision_profile "
+        f"feature={ms_per(feature_seconds, decisions):.3f}ms "
+        f"tensorize={ms_per(tensorize_seconds, decisions):.3f}ms "
+        f"action={ms_per(action_seconds, decisions):.3f}ms "
+        f"shared_write="
+        f"{ms_per(shared_write_seconds, decisions):.3f}ms "
+        f"queue_put={ms_per(queue_put_seconds, decisions):.3f}ms "
+        f"inference_wait="
+        f"{ms_per(response_wait_seconds, decisions):.3f}ms "
+        f"other_battle="
+        f"{ms_per(other_battle_seconds, decisions):.3f}ms"
+    )
+
+    battle_timings = [
+        BattleTiming(**timing)
+        for profile in profiles
+        for timing in profile["battle_timings"]
+    ]
+
+    print(summarize_rollout_tail(battle_timings))
+
+    print(
+        "trajectory_transfer "
+        f"load={total_load_seconds:.3f}s "
+        f"concat={concat_seconds:.3f}s "
+        f"size={total_file_mb:.1f}MB"
+    )
+
+    return rollout
 
 
 async def evaluate_multiprocess(
@@ -857,17 +1094,19 @@ async def train(
     device = torch.device("cuda")
     max_rollout_concurrency = min(
         training_config.rollout_battles,
-        running_config.workers * args.battle_lanes,
+        running_config.workers * running_config.battle_lanes,
     )
 
     print(f"Training device: {device}")
     print("Rollout inference: cuda (central async batched broker)")
     print(f"Rollout processes: {running_config.workers}")
-    print(f"Battle lanes per process: {args.battle_lanes}")
+    print(f"Battle lanes per process: {running_config.battle_lanes}")
     print(f"Max rollout battles in flight: {max_rollout_concurrency}")
     print(f"PyTorch threads per rollout process: {running_config.threads}")
-    print(f"GPU inference max batch: {args.gpu_batch_size}")
-    print(f"GPU inference batch wait: {args.gpu_batch_wait_ms:.3f} ms")
+    print(f"GPU inference max batch: {running_config.gpu_batch_size}")
+    print(
+        f"GPU inference batch wait: {running_config.gpu_batch_wait_ms:.3f} ms"
+    )
 
     model = create_model(device, model_config)
     model.eval()
@@ -876,8 +1115,7 @@ async def train(
     print(f"Model parameters: {parameter_count:,}")
 
     optimizer = torch.optim.Adam(
-        model.parameters(),
-        lr=ppo_config.learning_rate,
+        model.parameters(), lr=ppo_config.learning_rate
     )
 
     wandb_run = None
@@ -899,27 +1137,23 @@ async def train(
                 "reward": asdict(reward_config),
                 "training_device": str(device),
                 "rollout_inference_device": str(device),
-                "battle_lanes": args.battle_lanes,
-                "gpu_batch_size": args.gpu_batch_size,
-                "gpu_batch_wait_ms": args.gpu_batch_wait_ms,
                 "parameter_count": parameter_count,
             },
         )
 
     context = multiprocessing.get_context("spawn")
-    slot_count = running_config.workers * args.battle_lanes
+    slot_count = running_config.workers * running_config.battle_lanes
 
     request_queue = context.Queue(
-        maxsize=max(slot_count * 2, args.gpu_batch_size * 2)
+        maxsize=max(slot_count * 2, running_config.gpu_batch_size * 2)
     )
     response_queues = [
-        context.Queue(maxsize=max(args.battle_lanes * 2, 8))
+        context.Queue(maxsize=max(running_config.battle_lanes * 2, 8))
         for _ in range(running_config.workers)
     ]
 
     shared_buffer = SharedBattleBuffer.create(
-        slot_count=slot_count,
-        max_history=tensorizer.max_history,
+        slot_count=slot_count, max_history=tensorizer.max_history
     )
 
     inference_broker = BatchedGpuInferenceBroker(
@@ -928,8 +1162,8 @@ async def train(
         request_queue=request_queue,
         response_queues=response_queues,
         shared_buffer=shared_buffer,
-        max_batch_size=args.gpu_batch_size,
-        batch_wait_ms=args.gpu_batch_wait_ms,
+        max_batch_size=running_config.gpu_batch_size,
+        batch_wait_ms=running_config.gpu_batch_wait_ms,
     )
 
     pool: ProcessPoolExecutor | None = None
@@ -971,7 +1205,7 @@ async def train(
                 team_seed=training_config.team_seed,
                 battles=training_config.eval_battles,
                 worker_count=running_config.workers,
-                battle_lanes=args.battle_lanes,
+                battle_lanes=running_config.battle_lanes,
                 phase_id=phase_id,
                 tensorizer=tensorizer,
             )
@@ -988,10 +1222,7 @@ async def train(
                 training_config.eval_battles,
                 evaluation_seconds,
             )
-            print_gpu_inference_stats(
-                "gpu_inference",
-                initial_inference_stats,
-            )
+            print_gpu_inference_stats("gpu_inference", initial_inference_stats)
 
             if wandb_run is not None:
                 wandb_run.log(
@@ -1032,7 +1263,7 @@ async def train(
                     team_seed=training_config.team_seed,
                     battles=training_config.rollout_battles,
                     worker_count=running_config.workers,
-                    battle_lanes=args.battle_lanes,
+                    battle_lanes=running_config.battle_lanes,
                     phase_id=phase_id,
                     temporary_directory=temporary_directory,
                     reward_config=reward_config,
@@ -1057,22 +1288,13 @@ async def train(
                 )
                 ppo_seconds = perf_counter() - ppo_start
 
-                battle_count = len(trajectories)
+                battle_count = trajectories.battle_count
+
                 train_win_rate = wins / battle_count
+
                 mean_decisions = decisions / battle_count
 
-                breakdowns = [
-                    trajectory.reward_breakdown for trajectory in trajectories
-                ]
-
-                if any(breakdown is None for breakdown in breakdowns):
-                    raise RuntimeError("Missing reward breakdown")
-
-                reward_breakdowns = [
-                    breakdown
-                    for breakdown in breakdowns
-                    if breakdown is not None
-                ]
+                reward_breakdowns = trajectories.reward_breakdowns
 
                 print()
                 print(datetime.now(tz=UTC).strftime("%c"))  # type:ignore
@@ -1089,8 +1311,7 @@ async def train(
                 )
                 print(f"ppo_time={ppo_seconds:.2f}s")
                 print_gpu_inference_stats(
-                    "gpu_inference",
-                    rollout_inference_stats,
+                    "gpu_inference", rollout_inference_stats
                 )
                 print_metrics(metrics)
 
@@ -1159,7 +1380,9 @@ async def train(
                         / battle_count
                     ),
                     "battle/enemy_hp_fraction": (
-                        sum(item.enemy_hp_fraction for item in reward_breakdowns)
+                        sum(
+                            item.enemy_hp_fraction for item in reward_breakdowns
+                        )
                         / battle_count
                     ),
                     "battle/mean_moves": (
@@ -1173,18 +1396,20 @@ async def train(
                     inference_broker.reset_stats()
                     evaluation_start = perf_counter()
 
-                    eval_wins, eval_losses, eval_ties = (
-                        await evaluate_multiprocess(
-                            pool=pool,
-                            url=running_config.url,
-                            fmt=running_config.format,
-                            team_seed=training_config.team_seed,
-                            battles=training_config.eval_battles,
-                            worker_count=running_config.workers,
-                            battle_lanes=args.battle_lanes,
-                            phase_id=phase_id,
-                            tensorizer=tensorizer,
-                        )
+                    (
+                        eval_wins,
+                        eval_losses,
+                        eval_ties,
+                    ) = await evaluate_multiprocess(
+                        pool=pool,
+                        url=running_config.url,
+                        fmt=running_config.format,
+                        team_seed=training_config.team_seed,
+                        battles=training_config.eval_battles,
+                        worker_count=running_config.workers,
+                        battle_lanes=running_config.battle_lanes,
+                        phase_id=phase_id,
+                        tensorizer=tensorizer,
                     )
 
                     evaluation_seconds = perf_counter() - evaluation_start
@@ -1205,8 +1430,7 @@ async def train(
                         f"{training_config.eval_battles / evaluation_seconds:.2f}"
                     )
                     print_gpu_inference_stats(
-                        "eval_gpu_inference",
-                        eval_inference_stats,
+                        "eval_gpu_inference", eval_inference_stats
                     )
 
                     log_data.update(
@@ -1318,10 +1542,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-wandb", action="store_true")
     parser.add_argument("--wandb-group", default=None)
 
-    parser.add_argument("--battle-lanes", type=int, default=8)
-    parser.add_argument("--gpu-batch-size", type=int, default=64)
-    parser.add_argument("--gpu-batch-wait-ms", type=float, default=0.5)
-
     parser.add_argument("--set-training", nargs="*", default=[])
     parser.add_argument("--set-ppo", nargs="*", default=[])
     parser.add_argument("--set-reward", nargs="*", default=[])
@@ -1334,15 +1554,6 @@ def parse_args() -> argparse.Namespace:
         raise ValueError(
             "--wandb-name must be set unless --no-wandb flag is active"
         )
-
-    if args.battle_lanes <= 0:
-        raise ValueError("--battle-lanes must be > 0")
-
-    if args.gpu_batch_size <= 0:
-        raise ValueError("--gpu-batch-size must be > 0")
-
-    if args.gpu_batch_wait_ms < 0.0:
-        raise ValueError("--gpu-batch-wait-ms must be >= 0")
 
     return args
 

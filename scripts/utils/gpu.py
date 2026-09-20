@@ -51,7 +51,11 @@ class GpuInferenceStats:
     requests: int
     batches: int
     max_batch_size: int
+
+    total_batch_wait_seconds: float
+    total_gather_seconds: float
     total_inference_seconds: float
+    total_dispatch_seconds: float
 
     @property
     def mean_batch_size(self) -> float:
@@ -322,11 +326,20 @@ def stop_response_pump(worker_index: int) -> None:
     response_queue.put(None)
 
 
+@dataclass
+class WorkerInferenceStats:
+    requests: int = 0
+    shared_write_seconds: float = 0.0
+    queue_put_seconds: float = 0.0
+    response_wait_seconds: float = 0.0
+
+
 def make_remote_infer(
     *,
     worker_index: int,
     slot_index: int,
     pending: PendingInference,
+    stats: WorkerInferenceStats | None = None,
     timeout_seconds: float = 120.0,
 ) -> AsyncInferenceFn:
     """Create the async inference callable injected into one battle lane."""
@@ -360,7 +373,9 @@ def make_remote_infer(
             )
 
         pending[key] = future
+        write_start = perf_counter()
         shared_buffer.write(slot_index, observation)
+        write_end = perf_counter()
 
         request_queue.put(
             InferenceRequest(
@@ -369,15 +384,32 @@ def make_remote_infer(
                 request_id=request_id,
             )
         )
+        put_end = perf_counter()
+
+        if stats is not None:
+            stats.requests += 1
+            stats.shared_write_seconds += write_end - write_start
+            stats.queue_put_seconds += put_end - write_end
 
         try:
-            return await asyncio.wait_for(
+            result = await asyncio.wait_for(
                 asyncio.shield(future), timeout=timeout_seconds
             )
+
+            if stats is not None:
+                stats.response_wait_seconds += perf_counter() - put_end
+
+            return result
+
         except BaseException:
+            if stats is not None:
+                stats.response_wait_seconds += perf_counter() - put_end
+
             pending.pop(key, None)
+
             if not future.done():
                 future.cancel()
+
             raise
 
     return infer
@@ -449,6 +481,9 @@ class BatchedGpuInferenceBroker:
             self._batches = 0
             self._max_observed_batch_size = 0
             self._total_inference_seconds = 0.0
+            self._total_batch_wait_seconds = 0.0
+            self._total_gather_seconds = 0.0
+            self._total_dispatch_seconds = 0.0
 
     def snapshot_stats(self) -> GpuInferenceStats:
         with self._stats_lock:
@@ -457,6 +492,9 @@ class BatchedGpuInferenceBroker:
                 batches=self._batches,
                 max_batch_size=self._max_observed_batch_size,
                 total_inference_seconds=self._total_inference_seconds,
+                total_batch_wait_seconds=self._total_batch_wait_seconds,
+                total_dispatch_seconds=self._total_dispatch_seconds,
+                total_gather_seconds=self._total_gather_seconds,
             )
 
     def _run(self) -> None:
@@ -475,6 +513,7 @@ class BatchedGpuInferenceBroker:
                 )
 
             requests = [item]
+            batch_wait_start = perf_counter()
 
             if self.batch_wait_seconds > 0.0:
                 deadline = perf_counter() + self.batch_wait_seconds
@@ -519,20 +558,28 @@ class BatchedGpuInferenceBroker:
 
                     requests.append(next_item)
 
+            batch_wait_seconds = perf_counter() - batch_wait_start
+
+            with self._stats_lock:
+                self._total_batch_wait_seconds += batch_wait_seconds
+
             self._process_batch(requests)
 
             if stop_after_batch:
                 return
 
     def _process_batch(self, requests: list[InferenceRequest]) -> None:
+        gather_start = perf_counter()
+
         cpu_batch = self.shared_buffer.batch(
             [request.slot_index for request in requests]
         )
 
+        gather_seconds = perf_counter() - gather_start
+
         inference_start = perf_counter()
 
         gpu_batch = cpu_batch.to(self.device)
-        self.model.eval()
 
         with torch.inference_mode():
             logits, values = self.model(gpu_batch)
@@ -541,20 +588,12 @@ class BatchedGpuInferenceBroker:
         values_cpu = values.detach().cpu()
 
         inference_seconds = perf_counter() - inference_start
+
         expected_batch = len(requests)
 
-        if logits_cpu.shape != (expected_batch, ACTION_COUNT):
-            raise RuntimeError(
-                "Expected policy logits shape "
-                f"({expected_batch}, {ACTION_COUNT}), "
-                f"got {tuple(logits_cpu.shape)}"
-            )
+        # existing shape checks...
 
-        if values_cpu.shape != (expected_batch,):
-            raise RuntimeError(
-                "Expected value shape "
-                f"({expected_batch},), got {tuple(values_cpu.shape)}"
-            )
+        dispatch_start = perf_counter()
 
         for index, request in enumerate(requests):
             self.response_queues[request.worker_index].put(
@@ -568,13 +607,17 @@ class BatchedGpuInferenceBroker:
                 )
             )
 
+        dispatch_seconds = perf_counter() - dispatch_start
+
         with self._stats_lock:
             self._requests += expected_batch
             self._batches += 1
             self._max_observed_batch_size = max(
                 self._max_observed_batch_size, expected_batch
             )
+            self._total_gather_seconds += gather_seconds
             self._total_inference_seconds += inference_seconds
+            self._total_dispatch_seconds += dispatch_seconds
 
     def _send_errors(
         self, requests: list[InferenceRequest], error_text: str

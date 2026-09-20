@@ -4,8 +4,7 @@ import torch
 from torch.distributions import Categorical
 
 from ai_cif.model.model import BattleModel
-from ai_cif.training.trajectory import Trajectory
-from ai_cif.vectorization.tensorizer import collate_battles
+from ai_cif.training.trajectory import PackedRollout, Trajectory
 
 
 @dataclass(frozen=True)
@@ -45,46 +44,41 @@ def ppo_update(
     *,
     model: BattleModel,
     optimizer: torch.optim.Optimizer,
-    trajectories: list[Trajectory],
+    trajectories: list[Trajectory] | PackedRollout,
     config: PPOConfig,
     device: torch.device,
 ) -> PPOMetrics:
-    decisions = [
-        decision
-        for trajectory in trajectories
-        for decision in trajectory.decisions
-    ]
+    rollout = (
+        trajectories
+        if isinstance(trajectories, PackedRollout)
+        else PackedRollout.from_trajectories(trajectories)
+    )
 
-    if not decisions:
+    if rollout.decision_count == 0:
         raise ValueError("No decisions to train on")
 
-    if any(trajectory.reward is None for trajectory in trajectories):
-        raise ValueError("All trajectories must have a terminal outcome")
+    old_values = rollout.old_values
+    returns_cpu = rollout.returns
 
-    observations = [decision.observation for decision in decisions]
+    advantages_cpu = returns_cpu - old_values
 
-    actions = torch.tensor(
-        [decision.action for decision in decisions], dtype=torch.long
-    )
+    if advantages_cpu.numel() > 1:
+        advantages_cpu = (advantages_cpu - advantages_cpu.mean()) / (
+            advantages_cpu.std(unbiased=False) + 1e-8
+        )
 
-    old_log_probs = torch.tensor(
-        [decision.log_prob for decision in decisions], dtype=torch.float32
-    )
+    actions = rollout.actions.to(device)
 
-    old_values = torch.tensor(
-        [decision.value for decision in decisions], dtype=torch.float32
-    )
+    old_log_probs = rollout.old_log_probs.to(device)
 
-    returns = torch.cat(
-        [
-            torch.full(
-                (len(trajectory.decisions),),
-                float(trajectory.reward or 0),
-                dtype=torch.float32,
-            )
-            for trajectory in trajectories
-        ]
-    )
+    old_values = rollout.old_values
+    returns_cpu = rollout.returns
+    returns = returns_cpu.to(device)
+
+    actions = actions.to(device)
+    old_log_probs = rollout.old_log_probs.to(device)
+    old_values = old_values.to(device)
+    returns = returns.to(device)
 
     advantages = returns - old_values
 
@@ -93,12 +87,7 @@ def ppo_update(
             advantages.std(unbiased=False) + 1e-8
         )
 
-    actions = actions.to(device)
-    old_log_probs = old_log_probs.to(device)
-    returns = returns.to(device)
-    advantages = advantages.to(device)
-
-    count = len(decisions)
+    count = rollout.decision_count
 
     policy_losses: list[float] = []
     value_losses: list[float] = []
@@ -116,9 +105,7 @@ def ppo_update(
         for start in range(0, count, config.minibatch_size):
             indices = permutation[start : start + config.minibatch_size]
 
-            examples = [observations[int(index)] for index in indices]
-
-            batch = collate_battles(examples).to(device)
+            batch = rollout.observations.index_select(indices).to(device)
 
             batch_actions = actions[indices]
             batch_old_log_probs = old_log_probs[indices]

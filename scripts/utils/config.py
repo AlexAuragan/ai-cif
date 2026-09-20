@@ -34,6 +34,9 @@ RUNNING_TYPES = {
     "checkpoint_dir": Path,
     "wandb_project": str,
     "wandb_entity": str,
+    "battle_lane": int,
+    "gpu_batch_size": int,
+    "gpu_batch_wait_ms": float,
 }
 MODEL_TYPES = {
     "species_count": int,

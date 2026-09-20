@@ -1,0 +1,44 @@
+Training device: cuda
+Rollout inference: cuda (central async batched broker)
+Rollout processes: 20
+Battle lanes per process: 5
+Max rollout battles in flight: 100
+PyTorch threads per rollout process: 2
+GPU inference max batch: 24
+GPU inference batch wait: 0.000 ms
+Model parameters: 429,011
+
+Initial evaluation
+------------------
+Traceback (most recent call last):
+  File "/home/alex/Projects/ai-cif/scripts/train_gpu.py", line 1590, in <module>
+    asyncio.run(main())
+    ~~~~~~~~~~~^^^^^^^^
+  File "/home/alex/.local/share/uv/python/cpython-3.14.0-linux-x86_64-gnu/lib/python3.14/asyncio/runners.py", line 204, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "/home/alex/.local/share/uv/python/cpython-3.14.0-linux-x86_64-gnu/lib/python3.14/asyncio/runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/home/alex/.local/share/uv/python/cpython-3.14.0-linux-x86_64-gnu/lib/python3.14/asyncio/base_events.py", line 706, in run_until_complete
+    self.run_forever()
+    ~~~~~~~~~~~~~~~~^^
+  File "/home/alex/.local/share/uv/python/cpython-3.14.0-linux-x86_64-gnu/lib/python3.14/asyncio/base_events.py", line 677, in run_forever
+    self._run_once()
+    ~~~~~~~~~~~~~~^^
+  File "/home/alex/.local/share/uv/python/cpython-3.14.0-linux-x86_64-gnu/lib/python3.14/asyncio/base_events.py", line 2008, in _run_once
+    event_list = self._selector.select(timeout)
+  File "/home/alex/.local/share/uv/python/cpython-3.14.0-linux-x86_64-gnu/lib/python3.14/selectors.py", line 452, in select
+    fd_event_list = self._selector.poll(timeout, max_ev)
+  File "/home/alex/.local/share/uv/python/cpython-3.14.0-linux-x86_64-gnu/lib/python3.14/asyncio/runners.py", line 162, in _on_sigint
+    main_task.cancel()
+    ~~~~~~~~~~~~~~~~^^
+  File "/home/alex/.local/share/uv/python/cpython-3.14.0-linux-x86_64-gnu/lib/python3.14/asyncio/tasks.py", line 758, in cancel
+    if child.cancel(msg=msg):
+       ~~~~~~~~~~~~^^^^^^^^^
+  File "/home/alex/.local/share/uv/python/cpython-3.14.0-linux-x86_64-gnu/lib/python3.14/asyncio/base_events.py", line 817, in call_soon
+    def call_soon(self, callback, *args, context=None):
+    
+  File "/home/alex/.local/share/uv/python/cpython-3.14.0-linux-x86_64-gnu/lib/python3.14/asyncio/runners.py", line 166, in _on_sigint
+    raise KeyboardInterrupt()
+KeyboardInterrupt
