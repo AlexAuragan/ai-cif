@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from functools import partial
 from itertools import combinations_with_replacement
 from pathlib import Path
-from time import perf_counter
 
 import torch
 from dotenv import load_dotenv
@@ -484,7 +483,6 @@ async def evaluate_all(args: argparse.Namespace) -> None:
                     f"[{pair_index}/{len(pairs)}] {model_1.name} vs {model_2.name}"
                 )
 
-            start = perf_counter()
 
             result = await evaluate_pair_multiprocess(
                 pool=pool,
@@ -498,7 +496,6 @@ async def evaluate_all(args: argparse.Namespace) -> None:
                 phase_id=pair_index,
             )
 
-            elapsed = perf_counter() - start
 
             rows[key] = result_to_row(
                 fmt=args.fmt, model_1=model_1, model_2=model_2, result=result
@@ -513,8 +510,6 @@ async def evaluate_all(args: argparse.Namespace) -> None:
                 f"W/L/T={result.wins}/{result.losses}/{result.ties} "
                 f"variance={result.winrate_variance:.8f} "
                 f"std_error={result.standard_error:.2%} "
-                f"time={elapsed:.2f}s "
-                f"battles/s={result.battles / elapsed:.2f}"
             )
 
     except BaseException:

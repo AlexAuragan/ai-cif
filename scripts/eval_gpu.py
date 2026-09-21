@@ -130,31 +130,6 @@ class WorkerInferenceStats:
 
 
 @dataclass(frozen=True)
-class EvalGpuInferenceStats:
-    requests: int
-    collection_batches: int
-    model_forwards: int
-    max_collection_batch_size: int
-    max_model_batch_size: int
-    total_batch_wait_seconds: float
-    total_gather_seconds: float
-    total_inference_seconds: float
-    total_dispatch_seconds: float
-
-    @property
-    def mean_collection_batch_size(self) -> float:
-        if self.collection_batches == 0:
-            return 0.0
-        return self.requests / self.collection_batches
-
-    @property
-    def mean_model_batch_size(self) -> float:
-        if self.model_forwards == 0:
-            return 0.0
-        return self.requests / self.model_forwards
-
-
-@dataclass(frozen=True)
 class EvalInferenceRequest:
     worker_index: int
     slot_index: int
@@ -434,9 +409,7 @@ def make_remote_infer(
 
         pending[key] = future
 
-        write_start = perf_counter()
         shared_buffer.write(slot_index, observation)
-        write_end = perf_counter()
 
         request_queue.put(
             EvalInferenceRequest(
@@ -446,21 +419,16 @@ def make_remote_infer(
                 model_index=model_index,
             )
         )
-        put_end = perf_counter()
 
         stats.requests += 1
-        stats.shared_write_seconds += write_end - write_start
-        stats.queue_put_seconds += put_end - write_end
 
         try:
             result = await asyncio.wait_for(
                 asyncio.shield(future), timeout=timeout_seconds
             )
-            stats.response_wait_seconds += perf_counter() - put_end
             return result
 
         except BaseException:
-            stats.response_wait_seconds += perf_counter() - put_end
             pending.pop(key, None)
 
             if not future.done():
@@ -506,8 +474,6 @@ class MultiModelGpuInferenceBroker:
         self.batch_wait_seconds = batch_wait_ms / 1000.0
 
         self._thread: threading.Thread | None = None
-        self._stats_lock = threading.Lock()
-        self.reset_stats()
 
     def start(self) -> None:
         if self._thread is not None:
@@ -533,31 +499,6 @@ class MultiModelGpuInferenceBroker:
 
         self._thread = None
 
-    def reset_stats(self) -> None:
-        with self._stats_lock:
-            self._requests = 0
-            self._collection_batches = 0
-            self._model_forwards = 0
-            self._max_collection_batch_size = 0
-            self._max_model_batch_size = 0
-            self._total_batch_wait_seconds = 0.0
-            self._total_gather_seconds = 0.0
-            self._total_inference_seconds = 0.0
-            self._total_dispatch_seconds = 0.0
-
-    def snapshot_stats(self) -> EvalGpuInferenceStats:
-        with self._stats_lock:
-            return EvalGpuInferenceStats(
-                requests=self._requests,
-                collection_batches=self._collection_batches,
-                model_forwards=self._model_forwards,
-                max_collection_batch_size=self._max_collection_batch_size,
-                max_model_batch_size=self._max_model_batch_size,
-                total_batch_wait_seconds=self._total_batch_wait_seconds,
-                total_gather_seconds=self._total_gather_seconds,
-                total_inference_seconds=self._total_inference_seconds,
-                total_dispatch_seconds=self._total_dispatch_seconds,
-            )
 
     def _run(self) -> None:
         stop_after_batch = False
@@ -575,7 +516,6 @@ class MultiModelGpuInferenceBroker:
                 )
 
             requests = [item]
-            batch_wait_start = perf_counter()
 
             if self.batch_wait_seconds > 0.0:
                 deadline = perf_counter() + self.batch_wait_seconds
@@ -620,19 +560,9 @@ class MultiModelGpuInferenceBroker:
 
                     requests.append(next_item)
 
-            batch_wait_seconds = perf_counter() - batch_wait_start
-
             groups: dict[int, list[EvalInferenceRequest]] = {}
             for request in requests:
                 groups.setdefault(request.model_index, []).append(request)
-
-            with self._stats_lock:
-                self._requests += len(requests)
-                self._collection_batches += 1
-                self._max_collection_batch_size = max(
-                    self._max_collection_batch_size, len(requests)
-                )
-                self._total_batch_wait_seconds += batch_wait_seconds
 
             for model_index, group in groups.items():
                 for start in range(0, len(group), self.max_batch_size):
@@ -653,28 +583,22 @@ class MultiModelGpuInferenceBroker:
             if model is None:
                 raise KeyError(f"No GPU model registered for index {model_index}")
 
-            gather_start = perf_counter()
             cpu_batch = self.shared_buffer.batch(
                 [request.slot_index for request in requests]
             )
-            gather_seconds = perf_counter() - gather_start
 
-            inference_start = perf_counter()
             gpu_batch = cpu_batch.to(self.device)
 
             with torch.inference_mode():
                 logits, _ = model(gpu_batch)
 
             logits_cpu = logits.detach().cpu()
-            inference_seconds = perf_counter() - inference_start
 
             if logits_cpu.shape != (len(requests), ACTION_COUNT):
                 raise RuntimeError(
                     "Unexpected evaluation logits shape: "
                     f"{tuple(logits_cpu.shape)}"
                 )
-
-            dispatch_start = perf_counter()
 
             for index, request in enumerate(requests):
                 self.response_queues[request.worker_index].put(
@@ -687,34 +611,19 @@ class MultiModelGpuInferenceBroker:
                     )
                 )
 
-            dispatch_seconds = perf_counter() - dispatch_start
-
-            with self._stats_lock:
-                self._model_forwards += 1
-                self._max_model_batch_size = max(
-                    self._max_model_batch_size, len(requests)
-                )
-                self._total_gather_seconds += gather_seconds
-                self._total_inference_seconds += inference_seconds
-                self._total_dispatch_seconds += dispatch_seconds
-
         except BaseException:
-            self._send_errors(requests, traceback.format_exc())
-
-    def _send_errors(
-        self,
-        requests: list[EvalInferenceRequest],
-        error_text: str,
-    ) -> None:
-        for request in requests:
-            self.response_queues[request.worker_index].put(
-                EvalInferenceResponse(
-                    slot_index=request.slot_index,
-                    request_id=request.request_id,
-                    logits=None,
-                    error=error_text,
+            for request in requests:
+                self.response_queues[request.worker_index].put(
+                    EvalInferenceResponse(
+                        slot_index=request.slot_index,
+                        request_id=request.request_id,
+                        logits=None,
+                        error=traceback.format_exc(),
+                    )
                 )
-            )
+            raise
+
+
 
 
 def create_handler(
@@ -1046,21 +955,6 @@ def merge_pair_results(results: list[PairResult]) -> PairResult:
     )
 
 
-def merge_worker_stats(
-    stats: list[dict[str, int | float]],
-) -> WorkerInferenceStats:
-    return WorkerInferenceStats(
-        requests=sum(int(item["requests"]) for item in stats),
-        shared_write_seconds=sum(
-            float(item["shared_write_seconds"]) for item in stats
-        ),
-        queue_put_seconds=sum(float(item["queue_put_seconds"]) for item in stats),
-        response_wait_seconds=sum(
-            float(item["response_wait_seconds"]) for item in stats
-        ),
-    )
-
-
 async def evaluate_pair_multiprocess(
     *,
     pool: ProcessPoolExecutor,
@@ -1075,7 +969,7 @@ async def evaluate_pair_multiprocess(
     battle_lanes: int,
     phase_id: int,
     tensorizer: BattleTensorizer,
-) -> tuple[PairResult, WorkerInferenceStats]:
+) -> PairResult:
     counts = split_battles(battles, worker_count)
 
     worker_offsets: list[int] = []
@@ -1114,9 +1008,8 @@ async def evaluate_pair_multiprocess(
     worker_results = await asyncio.gather(*tasks)
 
     results = [result for result, _ in worker_results]
-    stats = [worker_stats for _, worker_stats in worker_results]
 
-    return merge_pair_results(results), merge_worker_stats(stats)
+    return merge_pair_results(results)
 
 
 def read_scores(path: Path) -> dict[tuple[str, str, str], dict[str, str]]:
@@ -1195,36 +1088,6 @@ def result_to_row(
         "losses": str(result.losses),
         "ties": str(result.ties),
     }
-
-
-def print_gpu_stats(
-    *,
-    gpu_stats: EvalGpuInferenceStats,
-    worker_stats: WorkerInferenceStats,
-) -> None:
-    if gpu_stats.requests == 0:
-        return
-
-    response_wait_ms = (
-        worker_stats.response_wait_seconds * 1000.0 / worker_stats.requests
-        if worker_stats.requests > 0
-        else 0.0
-    )
-
-    print(
-        "  gpu_inference "
-        f"requests={gpu_stats.requests} "
-        f"collection_batches={gpu_stats.collection_batches} "
-        f"mean_collection_batch={gpu_stats.mean_collection_batch_size:.2f} "
-        f"model_forwards={gpu_stats.model_forwards} "
-        f"mean_model_batch={gpu_stats.mean_model_batch_size:.2f} "
-        f"max_model_batch={gpu_stats.max_model_batch_size} "
-        f"batch_wait={gpu_stats.total_batch_wait_seconds:.3f}s "
-        f"gather={gpu_stats.total_gather_seconds:.3f}s "
-        f"gpu_roundtrip={gpu_stats.total_inference_seconds:.3f}s "
-        f"dispatch={gpu_stats.total_dispatch_seconds:.3f}s "
-        f"response_wait={response_wait_ms:.2f}ms"
-    )
 
 
 async def evaluate_all(args: argparse.Namespace) -> None:
@@ -1371,12 +1234,9 @@ async def evaluate_all(args: argparse.Namespace) -> None:
                 f"from offset {existing_battles}"
             )
 
-            if broker is not None:
-                broker.reset_stats()
 
-            start = perf_counter()
 
-            new_result, worker_stats = await evaluate_pair_multiprocess(
+            new_result = await evaluate_pair_multiprocess(
                 pool=pool,
                 model_1=model_1,
                 model_2=model_2,
@@ -1391,7 +1251,6 @@ async def evaluate_all(args: argparse.Namespace) -> None:
                 tensorizer=tensorizer,
             )
 
-            elapsed = perf_counter() - start
 
             if existing_result is None:
                 result = new_result
@@ -1403,24 +1262,10 @@ async def evaluate_all(args: argparse.Namespace) -> None:
                 fmt=args.fmt,
                 model_1=model_1,
                 model_2=model_2,
-                result=result,
+                result=result
             )
             write_scores(scores_path, rows)
 
-            tqdm.write(
-                f"  score={result.winrate:.2%} "
-                f"W/L/T={result.wins}/{result.losses}/{result.ties} "
-                f"variance={result.winrate_variance:.8f} "
-                f"std_error={result.standard_error:.2%} "
-                f"new_time={elapsed:.2f}s "
-                f"new_battles/s={new_result.battles / elapsed:.2f}"
-            )
-
-            if broker is not None:
-                print_gpu_stats(
-                    gpu_stats=broker.snapshot_stats(),
-                    worker_stats=worker_stats,
-                )
 
     except BaseException:
         if pool is not None:
