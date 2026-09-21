@@ -3,6 +3,7 @@ import asyncio
 import csv
 import math
 import multiprocessing
+import os
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from functools import partial
@@ -11,6 +12,7 @@ from pathlib import Path
 from time import perf_counter
 
 import torch
+from dotenv import load_dotenv
 from showdown_sdk.classes.client import Client
 from showdown_sdk.classes.combat_handler import (
     MaxBasePowerCombatHandler,
@@ -29,7 +31,12 @@ from ai_cif.model.model import create_battle_model
 from scripts.utils.battles import outcome_for, run_battle
 from scripts.utils.multithreading import split_battles, worker_initializer
 
-DEFAULT_WEBSOCKET_URL = "ws://127.0.0.1:8000/showdown/websocket"
+load_dotenv()
+
+DEFAULT_WEBSOCKET_URL = (
+    os.environ.get("DEFAULT_WEBSOCKET_URL")
+    or "ws://127.0.0.1:8000/showdown/websocket"
+)
 
 CSV_COLUMNS = [
     "format",

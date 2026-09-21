@@ -1296,8 +1296,9 @@ async def train(
 
                 reward_breakdowns = trajectories.reward_breakdowns
 
+                timestamp = datetime.now(tz=UTC).strftime("%c")
                 print()
-                print(datetime.now(tz=UTC).strftime("%c"))  # type:ignore
+                print(timestamp)
                 print(
                     f"iteration={iteration} "
                     f"battles={battle_count} "
@@ -1316,6 +1317,7 @@ async def train(
                 print_metrics(metrics)
 
                 log_data = {
+                    "iteration/index": iteration,
                     "train/battles": battle_count,
                     "train/decisions": decisions,
                     "train/wins": wins,
