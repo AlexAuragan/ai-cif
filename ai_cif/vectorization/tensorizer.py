@@ -183,6 +183,32 @@ FIELD_NUMERIC_DIM: Final = 8 + 3 * len(SIDE_CONDITION_NAMES)
 # 17 baton pass
 HISTORY_NUMERIC_DIM: Final = 18
 
+## Moves data
+TYPE_NAMES: Final = (
+    "normal",
+    "fire",
+    "water",
+    "electric",
+    "grass",
+    "ice",
+    "fighting",
+    "poison",
+    "ground",
+    "flying",
+    "psychic",
+    "bug",
+    "rock",
+    "ghost",
+    "dragon",
+    "dark",
+    "steel",
+    "fairy",
+)
+
+TYPE_INDEX: Final = {name: i for i, name in enumerate(TYPE_NAMES)}
+TYPE_COUNT: Final = len(TYPE_NAMES)
+
+BASE_STATS_DIM: Final = 6
 
 ## Tensor containers
 
@@ -195,6 +221,8 @@ class BattleTensors:
         base_species_ids:    [12]
         species_ids:         [12]
         form_ids:            [12]
+        pokemon_types:       [12, 18]
+        pokemon_base_stats:  [12, 6]
         move_ids:            [12, 4]
         item_ids:            [12]
         ability_ids:         [12]
@@ -222,6 +250,8 @@ class BattleTensors:
     base_species_ids: Tensor
     species_ids: Tensor
     form_ids: Tensor
+    pokemon_types: Tensor
+    pokemon_base_stats: Tensor
     move_ids: Tensor
     item_ids: Tensor
     ability_ids: Tensor
@@ -252,6 +282,8 @@ class BattleTensors:
             base_species_ids=self.base_species_ids.unsqueeze(0),
             species_ids=self.species_ids.unsqueeze(0),
             form_ids=self.form_ids.unsqueeze(0),
+            pokemon_types=self.pokemon_types.unsqueeze(0),
+            pokemon_base_stats=self.pokemon_base_stats.unsqueeze(0),
             move_ids=self.move_ids.unsqueeze(0),
             item_ids=self.item_ids.unsqueeze(0),
             ability_ids=self.ability_ids.unsqueeze(0),
@@ -278,6 +310,8 @@ class BattleTensors:
             base_species_ids=self.base_species_ids.to(device),
             species_ids=self.species_ids.to(device),
             form_ids=self.form_ids.to(device),
+            pokemon_base_stats=self.pokemon_base_stats.to(device),
+            pokemon_types=self.pokemon_types.to(device),
             move_ids=self.move_ids.to(device),
             item_ids=self.item_ids.to(device),
             ability_ids=self.ability_ids.to(device),
@@ -310,6 +344,8 @@ class BattleBatch:
     base_species_ids: Tensor
     species_ids: Tensor
     form_ids: Tensor
+    pokemon_types: Tensor
+    pokemon_base_stats: Tensor
     move_ids: Tensor
     item_ids: Tensor
     ability_ids: Tensor
@@ -338,6 +374,8 @@ class BattleBatch:
             base_species_ids=self.base_species_ids.to(device),
             species_ids=self.species_ids.to(device),
             form_ids=self.form_ids.to(device),
+            pokemon_types=self.pokemon_types.to(device),
+            pokemon_base_stats=self.pokemon_base_stats.to(device),
             move_ids=self.move_ids.to(device),
             item_ids=self.item_ids.to(device),
             ability_ids=self.ability_ids.to(device),
@@ -374,6 +412,8 @@ class BattleBatch:
             base_species_ids=self.base_species_ids.index_select(0, indices),
             species_ids=self.species_ids.index_select(0, indices),
             form_ids=self.form_ids.index_select(0, indices),
+            pokemon_types=self.pokemon_types.index_select(0, indices),
+            pokemon_base_stats=self.pokemon_base_stats.index_select(0, indices),
             move_ids=self.move_ids.index_select(0, indices),
             item_ids=self.item_ids.index_select(0, indices),
             ability_ids=self.ability_ids.index_select(0, indices),
@@ -408,6 +448,8 @@ class BattleBatch:
                 [batch.species_ids for batch in batches], dim=0
             ),
             form_ids=torch.cat([batch.form_ids for batch in batches], dim=0),
+            pokemon_types=torch.cat([batch.pokemon_types for batch in batches], dim=0),
+            pokemon_base_stats=torch.cat([batch.pokemon_base_stats for batch in batches], dim=0),
             move_ids=torch.cat([batch.move_ids for batch in batches], dim=0),
             item_ids=torch.cat([batch.item_ids for batch in batches], dim=0),
             ability_ids=torch.cat(
@@ -523,6 +565,47 @@ class BattleTensorizer:
         self.ability_vocab_size = limits.ability + 2
         self.item_vocab_size = limits.item + 2
 
+
+    def _tensorize_pokemon_mechanics(
+        self,
+        features: BattleFeatures,
+    ) -> tuple[Tensor, Tensor]:
+        types = torch.zeros(
+            (POKEMON_SLOTS, TYPE_COUNT),
+            dtype=torch.float32,
+        )
+
+        base_stats = torch.zeros(
+            (POKEMON_SLOTS, BASE_STATS_DIM),
+            dtype=torch.float32,
+        )
+
+        pokemon = (*features.own_team, *features.enemy_team)
+
+        for row, mon in enumerate(pokemon):
+            mechanics = mon.mechanics
+
+            if mechanics is None:
+                continue
+
+            for type_name in mechanics.types:
+                index = TYPE_INDEX.get(type_name)
+                if index is not None:
+                    types[row, index] = 1.0
+
+            stats = mechanics.base_stats
+            if stats is None:
+                continue
+
+            base_stats[row, 0] = _normalize_base_stat(stats.hp)
+            base_stats[row, 1] = _normalize_base_stat(stats.attack)
+            base_stats[row, 2] = _normalize_base_stat(stats.defense)
+            base_stats[row, 3] = _normalize_base_stat(stats.special_attack)
+            base_stats[row, 4] = _normalize_base_stat(stats.special_defense)
+            base_stats[row, 5] = _normalize_base_stat(stats.speed)
+
+        return types, base_stats
+
     def tensorize(
         self, features: BattleFeatures, *, device: DeviceLike | None = None
     ) -> BattleTensors:
@@ -567,11 +650,14 @@ class BattleTensorizer:
         )
 
         action_mask = self._tensorize_action_mask(features)
+        pokemon_types, pokemon_base_stats = self._tensorize_pokemon_mechanics(features)
 
         output = BattleTensors(
             base_species_ids=categorical["base_species_ids"],
             species_ids=categorical["species_ids"],
             form_ids=categorical["form_ids"],
+            pokemon_types=pokemon_types,
+            pokemon_base_stats=pokemon_base_stats,
             move_ids=categorical["move_ids"],
             item_ids=categorical["item_ids"],
             ability_ids=categorical["ability_ids"],
@@ -1236,6 +1322,12 @@ class BattleTensorizer:
                     f"{name} has shape {actual[name]}, expected {expected_shape}"
                 )
 
+## Helpers
+def _normalize_base_stat(value: int | None) -> float:
+    if value is None:
+        return 0.0
+
+    return _clamp_float(value / 255.0, 0.0, 1.0)
 
 ## Batching
 
@@ -1258,6 +1350,8 @@ def collate_battles(examples: list[BattleTensors]) -> BattleBatch:
         base_species_ids=torch.stack([x.base_species_ids for x in examples]),
         species_ids=torch.stack([x.species_ids for x in examples]),
         form_ids=torch.stack([x.form_ids for x in examples]),
+        pokemon_types=torch.stack([x.pokemon_types for x in examples]),
+        pokemon_base_stats=torch.stack([x.pokemon_base_stats for x in examples]),
         move_ids=torch.stack([x.move_ids for x in examples]),
         item_ids=torch.stack([x.item_ids for x in examples]),
         ability_ids=torch.stack([x.ability_ids for x in examples]),

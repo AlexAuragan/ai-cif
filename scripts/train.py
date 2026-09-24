@@ -109,7 +109,7 @@ TRAINING_CONFIG = TrainingConfig(
 )
 
 POOL_CONFIG = PoolConfig(
-    semi_random_share=0.2,
+    semi_random_share=0.8,
     win_rate_threshold=0.75,
     random_share_increment=0.1,
 )
@@ -1122,10 +1122,10 @@ async def train(
 
                     if win_rate > pool_config.win_rate_threshold:
                         previous_share = pool_config.semi_random_share
-                        pool_config.semi_random_share = min(
-                            1.0,
+                        pool_config.semi_random_share = max(
+                            0,
                             pool_config.semi_random_share
-                            + pool_config.random_share_increment,
+                            - pool_config.random_share_increment,
                         )
                         print(
                             f"POOL semi_random_share "
