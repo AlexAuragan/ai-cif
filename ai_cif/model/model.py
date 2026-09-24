@@ -66,15 +66,17 @@ class BattleModel(nn.Module):
 
     def forward(self, batch: BattleBatch) -> tuple[Tensor, Tensor]:
         pokemon = self.pokemon_encoder(
-            base_species=batch.base_species_ids,
-            species=batch.species_ids,
-            form=batch.form_ids,
-            moves=batch.move_ids,
-            item=batch.item_ids,
-            ability=batch.ability_ids,
-            status=batch.status_ids,
-            numeric=batch.pokemon_numeric,
-        )
+                base_species=batch.base_species_ids,
+                species=batch.species_ids,
+                form=batch.form_ids,
+                moves=batch.move_ids,
+                item=batch.item_ids,
+                ability=batch.ability_ids,
+                status=batch.status_ids,
+                numeric=batch.pokemon_numeric,
+                types=batch.pokemon_types,
+                base_stats=batch.pokemon_base_stats,
+            )
 
         pokemon = pokemon.flatten(start_dim=1)
 

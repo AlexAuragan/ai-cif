@@ -2,6 +2,7 @@ import torch
 from torch import Tensor, nn
 
 from ai_cif.model.config import ModelConfig
+from ai_cif.vectorization.tensorizer import BASE_STATS_DIM
 
 
 class PokemonEncoder(nn.Module):
@@ -38,6 +39,8 @@ class PokemonEncoder(nn.Module):
             + config.status_embedding_dim
             + 4
             + numeric_feature_count
+            + 18 # Pokemon types
+            + 6 # Base stats
         )
 
         self.network = nn.Sequential(
@@ -53,6 +56,8 @@ class PokemonEncoder(nn.Module):
         base_species: Tensor,
         species: Tensor,
         form: Tensor,
+        pokemon_types: Tensor,
+        pokemon_base_stats: Tensor,
         moves: Tensor,
         item: Tensor,
         ability: Tensor,
@@ -89,6 +94,8 @@ class PokemonEncoder(nn.Module):
                 status_emb,
                 side_emb,
                 numeric,
+                pokemon_types,
+                pokemon_base_stats,
             ),
             dim=-1,
         )
