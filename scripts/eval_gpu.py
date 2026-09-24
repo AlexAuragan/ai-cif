@@ -195,9 +195,7 @@ def load_neural_models(
             )
 
         model, _ = create_battle_model(
-            device=device,
-            max_history=tensorizer.max_history,
-            vocab_gen=4,
+            device=device, max_history=tensorizer.max_history, vocab_gen=4
         )
 
         checkpoint_path = participant.checkpoint
@@ -206,9 +204,7 @@ def load_neural_models(
 
         # Keep optimizer state and other checkpoint payloads off the GPU.
         checkpoint = torch.load(
-            checkpoint_path,
-            map_location="cpu",
-            weights_only=False,
+            checkpoint_path, map_location="cpu", weights_only=False
         )
 
         if not isinstance(checkpoint, dict):
@@ -220,13 +216,17 @@ def load_neural_models(
             model_state = checkpoint
 
         if not isinstance(model_state, dict):
-            raise TypeError(f"Checkpoint {checkpoint_path} has invalid model state")
+            raise TypeError(
+                f"Checkpoint {checkpoint_path} has invalid model state"
+            )
 
         model.load_state_dict(model_state)
         model.eval()
         models[participant.index] = model
 
-        parameter_count = sum(parameter.numel() for parameter in model.parameters())
+        parameter_count = sum(
+            parameter.numel() for parameter in model.parameters()
+        )
         print(
             f"Loaded {participant.name}: "
             f"model_index={participant.index} parameters={parameter_count:,}"
@@ -237,10 +237,7 @@ def load_neural_models(
 
 class AsyncEvalNeuralCombatHandler(AsyncBaseCombatHandler):
     def __init__(
-        self,
-        *,
-        tensorizer: BattleTensorizer,
-        infer: AsyncEvalInferenceFn,
+        self, *, tensorizer: BattleTensorizer, infer: AsyncEvalInferenceFn
     ) -> None:
         self.tensorizer = tensorizer
         self.infer = infer
@@ -307,7 +304,11 @@ def _worker_transport(
     response_queues = _EVAL_RESPONSE_QUEUES
     shared_buffer = _EVAL_SHARED_BUFFER
 
-    if request_queue is None or response_queues is None or shared_buffer is None:
+    if (
+        request_queue is None
+        or response_queues is None
+        or shared_buffer is None
+    ):
         raise RuntimeError("Evaluation GPU transport was not initialized")
 
     if not 0 <= worker_index < len(response_queues):
@@ -345,7 +346,9 @@ async def response_pump(
 
         if response.error is not None:
             future.set_exception(
-                RuntimeError(f"GPU evaluation inference failed:\n{response.error}")
+                RuntimeError(
+                    f"GPU evaluation inference failed:\n{response.error}"
+                )
             )
             continue
 
@@ -480,9 +483,7 @@ class MultiModelGpuInferenceBroker:
             raise RuntimeError("Evaluation inference broker is already running")
 
         self._thread = threading.Thread(
-            target=self._run,
-            name="eval-gpu-inference",
-            daemon=True,
+            target=self._run, name="eval-gpu-inference", daemon=True
         )
         self._thread.start()
 
@@ -495,10 +496,11 @@ class MultiModelGpuInferenceBroker:
         thread.join(timeout=30.0)
 
         if thread.is_alive():
-            raise RuntimeError("Evaluation inference broker did not stop cleanly")
+            raise RuntimeError(
+                "Evaluation inference broker did not stop cleanly"
+            )
 
         self._thread = None
-
 
     def _run(self) -> None:
         stop_after_batch = False
@@ -574,14 +576,14 @@ class MultiModelGpuInferenceBroker:
                 return
 
     def _process_model_group(
-        self,
-        model_index: int,
-        requests: list[EvalInferenceRequest],
+        self, model_index: int, requests: list[EvalInferenceRequest]
     ) -> None:
         try:
             model = self.models.get(model_index)
             if model is None:
-                raise KeyError(f"No GPU model registered for index {model_index}")
+                raise KeyError(
+                    f"No GPU model registered for index {model_index}"
+                )
 
             cpu_batch = self.shared_buffer.batch(
                 [request.slot_index for request in requests]
@@ -622,8 +624,6 @@ class MultiModelGpuInferenceBroker:
                     )
                 )
             raise
-
-
 
 
 def create_handler(
@@ -749,8 +749,7 @@ async def _pair_lane(
     try:
         await asyncio.gather(client_1.connect(), client_2.connect())
         await asyncio.gather(
-            client_1.login(client_1_name),
-            client_2.login(client_2_name),
+            client_1.login(client_1_name), client_2.login(client_2_name)
         )
 
         while completed < battles:
@@ -786,13 +785,10 @@ async def _pair_lane(
                 )
 
                 await asyncio.gather(
-                    client_1.close(),
-                    client_2.close(),
-                    return_exceptions=True,
+                    client_1.close(), client_2.close(), return_exceptions=True
                 )
                 await asyncio.gather(
-                    client_1.ensure_connected(),
-                    client_2.ensure_connected(),
+                    client_1.ensure_connected(), client_2.ensure_connected()
                 )
                 continue
 
@@ -828,9 +824,7 @@ async def _pair_lane(
 
     finally:
         await asyncio.gather(
-            client_1.close(),
-            client_2.close(),
-            return_exceptions=True,
+            client_1.close(), client_2.close(), return_exceptions=True
         )
 
 
@@ -1036,8 +1030,7 @@ def read_scores(path: Path) -> dict[tuple[str, str, str], dict[str, str]]:
 
 
 def write_scores(
-    path: Path,
-    rows: dict[tuple[str, str, str], dict[str, str]],
+    path: Path, rows: dict[tuple[str, str, str], dict[str, str]]
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1071,11 +1064,7 @@ def row_to_result(row: dict[str, str]) -> PairResult:
 
 
 def result_to_row(
-    *,
-    fmt: str,
-    model_1: Participant,
-    model_2: Participant,
-    result: PairResult,
+    *, fmt: str, model_1: Participant, model_2: Participant, result: PairResult
 ) -> dict[str, str]:
     return {
         "format": fmt,
@@ -1097,14 +1086,20 @@ async def evaluate_all(args: argparse.Namespace) -> None:
     pairs = list(combinations_with_replacement(participants, 2))
     rows = read_scores(scores_path)
 
-    pending_pairs: list[tuple[int, Participant, Participant, PairResult | None, int]] = []
+    pending_pairs: list[
+        tuple[int, Participant, Participant, PairResult | None, int]
+    ] = []
     required_model_indices: set[int] = set()
 
     for pair_index, (model_1, model_2) in enumerate(pairs, start=1):
         key = (args.fmt, model_1.name, model_2.name)
         existing_row = rows.get(key)
-        existing_result = row_to_result(existing_row) if existing_row is not None else None
-        existing_battles = existing_result.battles if existing_result is not None else 0
+        existing_result = (
+            row_to_result(existing_row) if existing_row is not None else None
+        )
+        existing_battles = (
+            existing_result.battles if existing_result is not None else 0
+        )
         remaining = max(0, args.battles - existing_battles)
 
         if remaining <= 0:
@@ -1143,12 +1138,12 @@ async def evaluate_all(args: argparse.Namespace) -> None:
         return
 
     if required_model_indices and not torch.cuda.is_available():
-        raise RuntimeError("eval_gpu.py requires CUDA/ROCm for neural participants")
+        raise RuntimeError(
+            "eval_gpu.py requires CUDA/ROCm for neural participants"
+        )
 
     device = (
-        torch.device("cuda")
-        if required_model_indices
-        else torch.device("cpu")
+        torch.device("cuda") if required_model_indices else torch.device("cpu")
     )
     models, tensorizer = load_neural_models(
         participants=participants,
@@ -1169,8 +1164,7 @@ async def evaluate_all(args: argparse.Namespace) -> None:
         for _ in range(args.workers)
     ]
     shared_buffer = SharedBattleBuffer.create(
-        slot_count=slot_count,
-        max_history=tensorizer.max_history,
+        slot_count=slot_count, max_history=tensorizer.max_history
     )
 
     broker: MultiModelGpuInferenceBroker | None = None
@@ -1208,15 +1202,16 @@ async def evaluate_all(args: argparse.Namespace) -> None:
         }
 
         for pair_index, (model_1, model_2) in enumerate(
-            tqdm(pairs, desc="Evaluating matchups", unit="pair"),
-            start=1,
+            tqdm(pairs, desc="Evaluating matchups", unit="pair"), start=1
         ):
             work = work_by_pair_index.get(pair_index)
 
             if work is None:
                 key = (args.fmt, model_1.name, model_2.name)
                 existing = rows.get(key)
-                existing_battles = int(existing["nb_battles"]) if existing else 0
+                existing_battles = (
+                    int(existing["nb_battles"]) if existing else 0
+                )
                 tqdm.write(
                     f"[{pair_index}/{len(pairs)}] "
                     f"{model_1.name} vs {model_2.name}: "
@@ -1234,8 +1229,6 @@ async def evaluate_all(args: argparse.Namespace) -> None:
                 f"from offset {existing_battles}"
             )
 
-
-
             new_result = await evaluate_pair_multiprocess(
                 pool=pool,
                 model_1=model_1,
@@ -1251,7 +1244,6 @@ async def evaluate_all(args: argparse.Namespace) -> None:
                 tensorizer=tensorizer,
             )
 
-
             if existing_result is None:
                 result = new_result
             else:
@@ -1259,13 +1251,9 @@ async def evaluate_all(args: argparse.Namespace) -> None:
 
             key = (args.fmt, model_1.name, model_2.name)
             rows[key] = result_to_row(
-                fmt=args.fmt,
-                model_1=model_1,
-                model_2=model_2,
-                result=result
+                fmt=args.fmt, model_1=model_1, model_2=model_2, result=result
             )
             write_scores(scores_path, rows)
-
 
     except BaseException:
         if pool is not None:

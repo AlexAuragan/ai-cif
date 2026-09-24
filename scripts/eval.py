@@ -483,7 +483,6 @@ async def evaluate_all(args: argparse.Namespace) -> None:
                     f"[{pair_index}/{len(pairs)}] {model_1.name} vs {model_2.name}"
                 )
 
-
             result = await evaluate_pair_multiprocess(
                 pool=pool,
                 model_1=model_1,
@@ -495,7 +494,6 @@ async def evaluate_all(args: argparse.Namespace) -> None:
                 worker_count=args.workers,
                 phase_id=pair_index,
             )
-
 
             rows[key] = result_to_row(
                 fmt=args.fmt, model_1=model_1, model_2=model_2, result=result

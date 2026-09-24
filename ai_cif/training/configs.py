@@ -23,3 +23,9 @@ class RunningConfig:
     battle_lanes: int = 8
     gpu_batch_size: int = 32
     gpu_batch_wait_ms: float = 0.5
+
+@dataclass
+class PoolConfig:
+    semi_random_share: float
+    win_rate_threshold: float
+    random_share_increment: float

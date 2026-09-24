@@ -362,6 +362,7 @@ def make_remote_infer(
 
         key = (slot_index, request_id)
         loop = asyncio.get_running_loop()
+
         future: asyncio.Future[tuple[torch.Tensor, float]] = (
             loop.create_future()
         )
@@ -373,25 +374,32 @@ def make_remote_infer(
             )
 
         pending[key] = future
-        write_start = perf_counter()
-        shared_buffer.write(slot_index, observation)
-        write_end = perf_counter()
 
-        request_queue.put(
-            InferenceRequest(
-                worker_index=worker_index,
-                slot_index=slot_index,
-                request_id=request_id,
-            )
+        request = InferenceRequest(
+            worker_index=worker_index,
+            slot_index=slot_index,
+            request_id=request_id,
         )
-        put_end = perf_counter()
-
-        if stats is not None:
-            stats.requests += 1
-            stats.shared_write_seconds += write_end - write_start
-            stats.queue_put_seconds += put_end - write_end
 
         try:
+            write_start = perf_counter()
+            shared_buffer.write(slot_index, observation)
+            write_end = perf_counter()
+
+            try:
+                request_queue.put_nowait(request)
+            except queue.Full:
+                # Do not block every battle lane in this worker if the
+                # broker temporarily falls behind.
+                await asyncio.to_thread(request_queue.put, request)
+
+            put_end = perf_counter()
+
+            if stats is not None:
+                stats.requests += 1
+                stats.shared_write_seconds += write_end - write_start
+                stats.queue_put_seconds += put_end - write_end
+
             result = await asyncio.wait_for(
                 asyncio.shield(future), timeout=timeout_seconds
             )
@@ -402,9 +410,6 @@ def make_remote_infer(
             return result
 
         except BaseException:
-            if stats is not None:
-                stats.response_wait_seconds += perf_counter() - put_end
-
             pending.pop(key, None)
 
             if not future.done():

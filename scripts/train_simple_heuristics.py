@@ -1,3 +1,7 @@
+"""
+This one is not trained from scratch but from crystal-x-00200 and against the SimpleHeuristic handler
+"""
+
 import argparse
 import asyncio
 import multiprocessing
@@ -10,29 +14,35 @@ from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from time import perf_counter
+from typing import override
 
 import torch
 from dotenv import load_dotenv
 from showdown_sdk.classes.client import Client
+from showdown_sdk.classes.combat_handler import SimpleHeuristicsCombatHandler
+from showdown_sdk.classes.combat_handler.base_handler import (
+    AsyncBaseCombatHandler,
+)
+from showdown_sdk.classes.combat_handler.utils import Action
 from showdown_sdk.exceptions import (
     BattleLifecycleError,
     BattleReproductionError,
     SDKTimeoutError,
 )
-from showdown_sdk.models.sdk import SampleTeamGenerator
+from showdown_sdk.features import battle_to_features
+from showdown_sdk.models.sdk import BattleState, SampleTeamGenerator
 from showdown_sdk.models.sdk.team_generators.team_generator import (
     BaseTeamGenerator,
 )
 
 import wandb
-from ai_cif.inference.combat_handler import AsyncNeuralCombatHandler
 from ai_cif.model.config import ModelConfig
 from ai_cif.model.model import BattleModel
-from ai_cif.training.combat_handler import AsyncSemiRandomCombatHandler
-from ai_cif.training.configs import PoolConfig, RunningConfig, TrainingConfig
+from ai_cif.training.configs import RunningConfig, TrainingConfig
 from ai_cif.training.ppo import PPOConfig, ppo_update
-from ai_cif.training.rewards import RewardConfig, breakdown_for
+from ai_cif.training.rewards import RewardBreakdown, RewardConfig, breakdown_for
 from ai_cif.training.trajectory import (
+    Decision,
     PackedRollout,
     Trajectory,
     mean_trajectory_reward,
@@ -48,18 +58,18 @@ from ai_cif.vectorization.tensorizer import (
     STATUS_VOCAB_SIZE,
     WEATHER_VOCAB_SIZE,
     BattleTensorizer,
+    BattleTensors,
 )
-from scripts.train_simple_heuristics import AsyncTrainingCombatHandler
 from scripts.utils.battles import outcome_for, run_battle
 from scripts.utils.config import (
     MODEL_TYPES,
-    POOL_TYPES,
     PPO_TYPES,
     REWARD_TYPES,
     RUNNING_TYPES,
     TRAINING_TYPES,
 )
 from scripts.utils.gpu import (
+    AsyncInferenceFn,
     BatchedGpuInferenceBroker,
     GpuInferenceStats,
     PendingInference,
@@ -70,7 +80,7 @@ from scripts.utils.gpu import (
     response_pump,
     stop_response_pump,
 )
-from scripts.utils.model import load_checkpoint, save_checkpoint
+from scripts.utils.model import save_checkpoint
 from scripts.utils.multithreading import split_battles
 
 load_dotenv()
@@ -81,9 +91,9 @@ DEFAULT_WEBSOCKET_URL = (
 )
 
 REWARD_CONFIG = RewardConfig(
-    outcome_weight=0.2,
-    own_hp_weight=0.4,
-    enemy_hp_weight=0.4,
+    outcome_weight=0.0,
+    own_hp_weight=0.5,
+    enemy_hp_weight=0.5,
     speed_weight=0.0,
     speed_scale=40.0,
 )
@@ -97,7 +107,7 @@ PPO_CONFIG = PPOConfig(
     epochs=2,
     minibatch_size=256,
     kl_target=0.02,
-    kl_ratio_threshold=2,
+    kl_ratio_threshold=None,
 )
 
 TRAINING_CONFIG = TrainingConfig(
@@ -106,12 +116,6 @@ TRAINING_CONFIG = TrainingConfig(
     eval_battles=1000,
     eval_interval=10,
     team_seed=42,
-)
-
-POOL_CONFIG = PoolConfig(
-    semi_random_share=0.2,
-    win_rate_threshold=0.75,
-    random_share_increment=0.1,
 )
 
 RUNNING_CONFIG = RunningConfig(
@@ -144,7 +148,9 @@ MODEL_CONFIG = ModelConfig(
 
 
 def create_model(
-    device: torch.device, model_config: ModelConfig
+    device: torch.device,
+    model_config: ModelConfig,
+    starting_weights: Path | None = None,
 ) -> BattleModel:
     torch.manual_seed(model_config.seed)
     model = BattleModel(
@@ -153,8 +159,169 @@ def create_model(
         field_numeric_feature_count=FIELD_NUMERIC_DIM,
         tactical_numeric_feature_count=HISTORY_NUMERIC_DIM,
     )
+
+    if starting_weights is not None:
+        checkpoint = torch.load(
+            starting_weights, map_location=device, weights_only=False
+        )
+
+        if not isinstance(checkpoint, dict):
+            raise TypeError(
+                f"Checkpoint {starting_weights} must contain a dict"
+            )
+
+        model_state = checkpoint.get("model", checkpoint)
+
+        if not isinstance(model_state, dict):
+            raise TypeError(
+                f"Checkpoint {starting_weights} has invalid model state"
+            )
+
+        model.load_state_dict(model_state)
+        print(f"Loaded starting weights from {starting_weights}")
+
     model.to(device)
     return model
+
+
+class AsyncNeuralCombatHandler(AsyncBaseCombatHandler):
+    """Generic async neural policy.
+
+    It knows how to tensorize a battle and consume an async inference callable.
+    It does not know anything about multiprocessing, shared memory, or CUDA.
+    """
+
+    def __init__(
+        self, *, tensorizer: BattleTensorizer, infer: AsyncInferenceFn
+    ) -> None:
+        self.tensorizer = tensorizer
+        self.infer = infer
+
+    async def _infer(
+        self, battle_state: BattleState
+    ) -> tuple[BattleTensors, torch.Tensor, float]:
+        features = battle_to_features(battle_state)
+        tensors = self.tensorizer.tensorize(features)
+
+        logits, value = await self.infer(tensors)
+
+        if logits.shape != (10,):
+            raise RuntimeError(
+                f"Expected policy logits shape (10,), got {tuple(logits.shape)}"
+            )
+
+        return tensors, logits, value
+
+    @override
+    async def async_select_top_actions(
+        self, battle_state: BattleState
+    ) -> list[Action]:
+        tensors, logits, _ = await self._infer(battle_state)
+
+        legal_indices = torch.where(tensors.action_mask)[0]
+
+        if legal_indices.numel() == 0:
+            raise RuntimeError("Model received a state with no legal actions")
+
+        scores = logits[legal_indices]
+        ranking = torch.argsort(scores, descending=True)
+        ranked_indices = legal_indices[ranking]
+
+        actions = [self._decode_action(int(index)) for index in ranked_indices]
+
+        return actions
+
+    @staticmethod
+    @override
+    async def async_select_team_order() -> list[int]:
+        return [1, 2, 3, 4, 5, 6]
+
+    @staticmethod
+    def _decode_action(index: int) -> Action:
+        if 0 <= index < 4:
+            return ("move", index + 1)
+
+        if 4 <= index < 10:
+            return ("switch", index - 3)
+
+        raise ValueError(f"Invalid action index: {index}")
+
+
+class AsyncTrainingCombatHandler(AsyncNeuralCombatHandler):
+    """Stochastic async policy used to collect PPO trajectories."""
+
+    def __init__(
+        self, *, tensorizer: BattleTensorizer, infer: AsyncInferenceFn
+    ) -> None:
+        super().__init__(tensorizer=tensorizer, infer=infer)
+        self.trajectory = Trajectory()
+
+    def start_battle(self) -> None:
+        self.trajectory = Trajectory()
+
+    def finish_battle(
+        self, outcome: float, reward_breakdown: RewardBreakdown
+    ) -> Trajectory:
+        reward = reward_breakdown.total
+
+        if outcome not in {-1.0, 0.0, 1.0}:
+            raise ValueError(f"Outcome must be -1, 0, or +1, got {outcome}")
+
+        if not -1.0 <= reward <= 1.0:
+            raise ValueError(f"Reward must be in [-1, 1], got {reward}")
+
+        self.trajectory.outcome = outcome
+        self.trajectory.reward = reward
+        self.trajectory.reward_breakdown = reward_breakdown
+        return self.trajectory
+
+    @override
+    async def async_select_top_actions(
+        self, battle_state: BattleState
+    ) -> list[Action]:
+        tensors, logits, value = await self._infer(battle_state)
+
+        legal_indices = torch.where(tensors.action_mask)[0]
+
+        if legal_indices.numel() == 0:
+            raise RuntimeError("Model received a state with no legal actions")
+
+        legal_logits = logits[legal_indices]
+
+        distribution = torch.distributions.Categorical(logits=legal_logits)
+
+        sampled_position = distribution.sample()
+        sampled_index = legal_indices[sampled_position]
+        log_prob = distribution.log_prob(sampled_position)
+
+        action_index = int(sampled_index.item())
+
+        self.trajectory.decisions.append(
+            Decision(
+                observation=tensors,
+                action=action_index,
+                log_prob=float(log_prob.item()),
+                value=value,
+            )
+        )
+
+        remaining_indices = legal_indices[legal_indices != sampled_index]
+
+        if remaining_indices.numel() > 0:
+            remaining_scores = logits[remaining_indices]
+
+            order = torch.argsort(remaining_scores, descending=True)
+
+            remaining_indices = remaining_indices[order]
+
+        ranked_indices = [
+            action_index,
+            *[int(index.item()) for index in remaining_indices],
+        ]
+
+        actions = [self._decode_action(index) for index in ranked_indices]
+
+        return actions
 
 
 def print_gpu_inference_stats(label: str, stats: GpuInferenceStats) -> None:
@@ -310,7 +477,6 @@ async def _rollout_lane(
     phase_id: int,
     reward_config: RewardConfig,
     tensorizer: BattleTensorizer,
-    pool_config: PoolConfig,
     pending: PendingInference,
     inference_stats: WorkerInferenceStats,
 ) -> list[Trajectory]:
@@ -325,12 +491,7 @@ async def _rollout_lane(
     handler = AsyncTrainingCombatHandler(tensorizer=tensorizer, infer=infer)
 
     neural_client = Client(url, combat_handler=handler)
-    random_client = Client(
-        url,
-        combat_handler=AsyncSemiRandomCombatHandler(
-            random_share=pool_config.semi_random_share
-        ),
-    )
+    random_client = Client(url, combat_handler=SimpleHeuristicsCombatHandler())
 
     neural_client.log_manager.disable()
     random_client.log_manager.disable()
@@ -378,7 +539,6 @@ async def _rollout_worker_async(
     output_path: str,
     reward_config: RewardConfig,
     tensorizer: BattleTensorizer,
-    pool_config: PoolConfig,
 ) -> str:
     lane_counts = split_battles(battles, battle_lanes)
 
@@ -404,7 +564,6 @@ async def _rollout_worker_async(
                     phase_id=phase_id,
                     reward_config=reward_config,
                     tensorizer=tensorizer,
-                    pool_config=pool_config,
                     pending=pending,
                     inference_stats=inference_stats,
                 )
@@ -461,7 +620,6 @@ def _rollout_worker(
     output_path: str,
     reward_config: RewardConfig,
     tensorizer: BattleTensorizer,
-    pool_config: PoolConfig,
 ) -> str:
     return asyncio.run(
         _rollout_worker_async(
@@ -475,7 +633,6 @@ def _rollout_worker(
             output_path=output_path,
             reward_config=reward_config,
             tensorizer=tensorizer,
-            pool_config=pool_config,
         )
     )
 
@@ -491,7 +648,6 @@ async def _evaluation_lane(
     battle_lanes: int,
     phase_id: int,
     tensorizer: BattleTensorizer,
-    pool_config: PoolConfig,
     pending: PendingInference,
 ) -> tuple[int, int, int]:
     slot_index = worker_index * battle_lanes + lane_index
@@ -502,12 +658,7 @@ async def _evaluation_lane(
     handler = AsyncNeuralCombatHandler(tensorizer=tensorizer, infer=infer)
 
     neural_client = Client(url, combat_handler=handler)
-    random_client = Client(
-        url,
-        combat_handler=AsyncSemiRandomCombatHandler(
-            random_share=pool_config.semi_random_share
-        ),
-    )
+    random_client = Client(url, combat_handler=SimpleHeuristicsCombatHandler())
 
     neural_client.log_manager.disable()
     random_client.log_manager.disable()
@@ -551,7 +702,6 @@ async def _evaluation_worker_async(
     battle_lanes: int,
     phase_id: int,
     tensorizer: BattleTensorizer,
-    pool_config: PoolConfig,
 ) -> tuple[int, int, int]:
     lane_counts = split_battles(battles, battle_lanes)
     pending: PendingInference = {}
@@ -572,7 +722,6 @@ async def _evaluation_worker_async(
                     battle_lanes=battle_lanes,
                     phase_id=phase_id,
                     tensorizer=tensorizer,
-                    pool_config=pool_config,
                     pending=pending,
                 )
             )
@@ -613,7 +762,6 @@ def _evaluation_worker(
     battle_lanes: int,
     phase_id: int,
     tensorizer: BattleTensorizer,
-    pool_config: PoolConfig,
 ) -> tuple[int, int, int]:
     return asyncio.run(
         _evaluation_worker_async(
@@ -625,7 +773,6 @@ def _evaluation_worker(
             battle_lanes=battle_lanes,
             phase_id=phase_id,
             tensorizer=tensorizer,
-            pool_config=pool_config,
         )
     )
 
@@ -643,7 +790,6 @@ async def collect_trajectories_multiprocess(
     temporary_directory: Path,
     reward_config: RewardConfig,
     tensorizer: BattleTensorizer,
-    pool_config: PoolConfig,
 ) -> PackedRollout:
     counts = split_battles(battles, worker_count)
 
@@ -673,7 +819,6 @@ async def collect_trajectories_multiprocess(
                     str(output_path),
                     reward_config,
                     tensorizer,
-                    pool_config,
                 ),
             )
         )
@@ -713,7 +858,6 @@ async def evaluate_multiprocess(
     battle_lanes: int,
     phase_id: int,
     tensorizer: BattleTensorizer,
-    pool_config: PoolConfig,
 ) -> tuple[int, int, int]:
     counts = split_battles(battles, worker_count)
     loop = asyncio.get_running_loop()
@@ -731,7 +875,6 @@ async def evaluate_multiprocess(
                 battle_lanes,
                 phase_id,
                 tensorizer,
-                pool_config,
             ),
         )
         for worker_index, count in enumerate(counts)
@@ -752,7 +895,6 @@ async def train(
     reward_config: RewardConfig,
     running_config: RunningConfig,
     model_config: ModelConfig,
-    pool_config: PoolConfig,
     tensorizer: BattleTensorizer,
 ) -> None:
     if not torch.cuda.is_available():
@@ -775,7 +917,10 @@ async def train(
         f"GPU inference batch wait: {running_config.gpu_batch_wait_ms:.3f} ms"
     )
 
-    model = create_model(device, model_config)
+    starting_weights = (
+        Path(args.starting_weights) if args.starting_weights else None
+    )
+    model = create_model(device, model_config, starting_weights)
     model.eval()
 
     parameter_count = sum(parameter.numel() for parameter in model.parameters())
@@ -783,38 +928,6 @@ async def train(
 
     optimizer = torch.optim.Adam(
         model.parameters(), lr=ppo_config.learning_rate
-    )
-
-    start_iteration = args.starting_iteration or 0
-
-    if args.starting_weights is not None:
-        checkpoint_iteration = load_checkpoint(
-            path=args.starting_weights,
-            model=model,
-            optimizer=optimizer,
-            device=device,
-        )
-
-        # Keep the configured learning rate authoritative in case it changed
-        # since the checkpoint was written.
-        for param_group in optimizer.param_groups:
-            param_group["lr"] = ppo_config.learning_rate
-
-        print(
-            f"Loaded starting checkpoint {args.starting_weights} "
-            f"(starting iteration {start_iteration})"
-        )
-
-        if checkpoint_iteration and checkpoint_iteration != start_iteration:
-            print(
-                f"Warning: checkpoint iteration {checkpoint_iteration} "
-                f"differs from --starting-iteration {start_iteration}"
-            )
-
-    print(
-        f"Training iterations: "
-        f"{start_iteration + 1}.."
-        f"{start_iteration + training_config.iterations}"
     )
 
     wandb_run = None
@@ -834,10 +947,14 @@ async def train(
                 "training": asdict(training_config),
                 "ppo": asdict(ppo_config),
                 "reward": asdict(reward_config),
-                "pool": asdict(pool_config),
                 "training_device": str(device),
                 "rollout_inference_device": str(device),
                 "parameter_count": parameter_count,
+                "starting_weights": (
+                    str(starting_weights)
+                    if starting_weights is not None
+                    else None
+                ),
             },
         )
 
@@ -908,7 +1025,6 @@ async def train(
                 battle_lanes=running_config.battle_lanes,
                 phase_id=phase_id,
                 tensorizer=tensorizer,
-                pool_config=pool_config,
             )
 
             evaluation_seconds = perf_counter() - evaluation_start
@@ -926,9 +1042,6 @@ async def train(
                         "eval/ties": ties,
                         "eval/win_rate": initial_win_rate,
                         "eval/best_win_rate": best_eval_win_rate,
-                        "pool/semi_random_share": (
-                            pool_config.semi_random_share
-                        ),
                         "eval/seconds": evaluation_seconds,
                         "eval/battles_per_second": (
                             training_config.eval_battles / evaluation_seconds
@@ -945,13 +1058,10 @@ async def train(
                             initial_inference_stats.total_inference_seconds
                         ),
                     },
-                    step=start_iteration,
+                    step=0,
                 )
 
-            for iteration in range(
-                start_iteration + 1,
-                start_iteration + training_config.iterations + 1,
-            ):
+            for iteration in range(1, training_config.iterations + 1):
                 phase_id += 1
                 inference_broker.reset_stats()
                 rollout_start = perf_counter()
@@ -968,7 +1078,6 @@ async def train(
                     temporary_directory=temporary_directory,
                     reward_config=reward_config,
                     tensorizer=tensorizer,
-                    pool_config=pool_config,
                 )
 
                 rollout_seconds = perf_counter() - rollout_start
@@ -1112,28 +1221,12 @@ async def train(
                         battle_lanes=running_config.battle_lanes,
                         phase_id=phase_id,
                         tensorizer=tensorizer,
-                        pool_config=pool_config,
                     )
 
                     evaluation_seconds = perf_counter() - evaluation_start
                     eval_inference_stats = inference_broker.snapshot_stats()
                     win_rate = eval_wins / training_config.eval_battles
                     best_eval_win_rate = max(best_eval_win_rate, win_rate)
-
-                    if win_rate > pool_config.win_rate_threshold:
-                        previous_share = pool_config.semi_random_share
-                        pool_config.semi_random_share = min(
-                            1.0,
-                            pool_config.semi_random_share
-                            + pool_config.random_share_increment,
-                        )
-                        print(
-                            f"POOL semi_random_share "
-                            f"{previous_share:.1%} -> "
-                            f"{pool_config.semi_random_share:.1%} "
-                            f"(win_rate={win_rate:.1%} > "
-                            f"threshold={pool_config.win_rate_threshold:.1%})"
-                        )
 
                     print(
                         f"EVAL iteration={iteration} "
@@ -1203,10 +1296,6 @@ async def train(
                         iteration=iteration,
                     )
 
-                log_data["pool/semi_random_share"] = (
-                    pool_config.semi_random_share
-                )
-
                 if wandb_run is not None:
                     wandb_run.log(log_data, step=iteration)
 
@@ -1264,15 +1353,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-wandb", action="store_true")
     parser.add_argument("--wandb-group", default=None)
 
-    parser.add_argument("--starting-weights", type=Path, default=None)
-    parser.add_argument("--starting-iteration", type=int, default=None)
-
+    parser.add_argument("--starting-weights", default=None)
     parser.add_argument("--set-training", nargs="*", default=[])
     parser.add_argument("--set-ppo", nargs="*", default=[])
     parser.add_argument("--set-reward", nargs="*", default=[])
     parser.add_argument("--set-running", nargs="*", default=[])
     parser.add_argument("--set-model", nargs="*", default=[])
-    parser.add_argument("--set-pool", nargs="*", default=[])
 
     args = parser.parse_args()
 
@@ -1280,14 +1366,6 @@ def parse_args() -> argparse.Namespace:
         raise ValueError(
             "--wandb-name must be set unless --no-wandb flag is active"
         )
-
-    if (args.starting_weights is None) != (args.starting_iteration is None):
-        raise ValueError(
-            "--starting_weights and --starting-iteration must be provided together"
-        )
-
-    if args.starting_iteration is not None and args.starting_iteration < 0:
-        raise ValueError("--starting-iteration must be non-negative")
 
     return args
 
@@ -1298,7 +1376,6 @@ async def main() -> None:
     reward_config = copy(REWARD_CONFIG)
     running_config = copy(RUNNING_CONFIG)
     model_config = copy(MODEL_CONFIG)
-    pool_config = copy(POOL_CONFIG)
     tensorizer = copy(TENSORIZER)
     args = parse_args()
 
@@ -1307,7 +1384,6 @@ async def main() -> None:
     apply_overrides(reward_config, args.set_reward, REWARD_TYPES)
     apply_overrides(running_config, args.set_running, RUNNING_TYPES)
     apply_overrides(model_config, args.set_model, MODEL_TYPES)
-    apply_overrides(pool_config, args.set_pool, POOL_TYPES)
 
     await train(
         args,
@@ -1316,7 +1392,6 @@ async def main() -> None:
         reward_config,
         running_config,
         model_config,
-        pool_config,
         tensorizer,
     )
 

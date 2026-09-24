@@ -34,7 +34,7 @@ RUNNING_TYPES = {
     "checkpoint_dir": Path,
     "wandb_project": str,
     "wandb_entity": str,
-    "battle_lane": int,
+    "battle_lanes": int,
     "gpu_batch_size": int,
     "gpu_batch_wait_ms": float,
 }
@@ -70,4 +70,10 @@ MODEL_TYPES = {
     "trunk_output_dim": int,
     "action_count": int,
     "seed": int,
+}
+
+POOL_TYPES = {
+    "semi_random_share": float,
+    "win_rate_threshold": float,
+    "random_share_increment": float,
 }

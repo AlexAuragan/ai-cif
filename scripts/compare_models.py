@@ -12,6 +12,7 @@ from typing import IO, Any
 
 import anyio
 import torch
+from dotenv import load_dotenv
 from showdown_sdk.classes.client import Client
 from showdown_sdk.classes.combat_handler import SimpleHeuristicsCombatHandler
 from showdown_sdk.exceptions import BattleLifecycleError
@@ -32,7 +33,12 @@ from ai_cif.vectorization.tensorizer import (
 from scripts.utils.battles import run_battle
 from scripts.utils.multithreading import split_battles, worker_initializer
 
-DEFAULT_WEBSOCKET_URL = "ws://127.0.0.1:8000/showdown/websocket"
+load_dotenv()
+
+DEFAULT_WEBSOCKET_URL = (
+    os.environ.get("DEFAULT_WEBSOCKET_URL")
+    or "ws://127.0.0.1:8000/showdown/websocket"
+)
 DATASET_SCHEMA = "ai-cif-policy-state-bank-v1"
 ACTION_LABELS = tuple(
     [f"move_{index}" for index in range(1, 5)]
@@ -586,7 +592,7 @@ def _action_label(index: int) -> str:
 
 def compare_models(
     state_bank_path: str | Path,
-    model_paths: list[str | Path],
+    model_paths: list[Path] | list[str],
     *,
     output_path: str | Path | None = None,
     batch_size: int = 512,
@@ -758,18 +764,8 @@ if __name__ == "__main__":
 
     report = compare_models(
         "data/ref_battle_states.json.gz",
-        [
-            "data/models/blue/1.pt",
-            "data/models/blue/2.pt",
-            "data/models/blue/3.pt",
-            "data/models/blue/4.pt",
-            "data/models/blue/5.pt",
-            "data/models/blue/6.pt",
-            "data/models/blue/7.pt",
-            "data/models/blue/8.pt",
-            "data/models/blue/9.pt",
-            "data/models/blue/10.pt",
-        ],
+        [f"data/models/crystal/crystal_{i}_00200.pt" for i in range(1, 11)]
+        + [f"data/models/fire/fire_{i}_00300.pt" for i in range(1, 11)],
         output_path="experiments/comparison_seed.json",
         device="cpu",
     )

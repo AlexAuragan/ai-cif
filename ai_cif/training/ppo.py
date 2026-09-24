@@ -127,8 +127,6 @@ def ppo_update(
             approx_kl = ((ratio - 1.0) - log_ratio).mean()
             kl_value = float(approx_kl.item())
 
-            approx_kls.append(kl_value)
-
             if (
                 config.kl_ratio_threshold is not None
                 and kl_value > config.kl_target * config.kl_ratio_threshold
@@ -180,14 +178,14 @@ def ppo_update(
     model.eval()
 
     return PPOMetrics(
-        policy_loss=sum(policy_losses) / len(policy_losses),
-        value_loss=sum(value_losses) / len(value_losses),
-        entropy=sum(entropies) / len(entropies),
-        total_loss=sum(total_losses) / len(total_losses),
-        approx_kl=sum(approx_kls) / len(approx_kls),
+        policy_loss=sum(policy_losses) / (len(policy_losses) or 1),
+        value_loss=sum(value_losses) / (len(value_losses) or 1),
+        entropy=sum(entropies) / (len(entropies) or 1),
+        total_loss=sum(total_losses) / (len(total_losses) or 1),
+        approx_kl=sum(approx_kls) / (len(approx_kls) or 1),
         max_approx_kl=max(approx_kls),
         early_stop=early_stop,
-        clip_fraction=sum(clip_fractions) / len(clip_fractions),
+        clip_fraction=sum(clip_fractions) / (len(clip_fractions) or 1),
         mean_value=float(old_values.mean().item()),
         mean_return=float(returns.mean().item()),
     )
