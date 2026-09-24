@@ -2,30 +2,46 @@ import torch
 from torch import Tensor, nn
 
 from ai_cif.model.config import ModelConfig
-from ai_cif.vectorization.tensorizer import BASE_STATS_DIM
+from ai_cif.vectorization.tensorizer import BASE_STATS_DIM, MOVE_CATEGORY_COUNT, MOVE_NUMERIC_DIM, MOVES_PER_POKEMON, TYPE_COUNT
 
 
 class PokemonEncoder(nn.Module):
-    def __init__(self, config: ModelConfig, numeric_feature_count: int) -> None:
+    def __init__(
+        self,
+        config: ModelConfig,
+        numeric_feature_count: int,
+    ) -> None:
         super().__init__()
 
         self.species_embedding = nn.Embedding(
-            config.species_count, config.species_embedding_dim, padding_idx=0
+            config.species_count,
+            config.species_embedding_dim,
+            padding_idx=0,
         )
         self.form_embedding = nn.Embedding(
-            config.form_count, config.form_embedding_dim, padding_idx=0
+            config.form_count,
+            config.form_embedding_dim,
+            padding_idx=0,
         )
         self.move_embedding = nn.Embedding(
-            config.move_count, config.move_embedding_dim, padding_idx=0
+            config.move_count,
+            config.move_embedding_dim,
+            padding_idx=0,
         )
         self.item_embedding = nn.Embedding(
-            config.item_count, config.item_embedding_dim, padding_idx=0
+            config.item_count,
+            config.item_embedding_dim,
+            padding_idx=0,
         )
         self.ability_embedding = nn.Embedding(
-            config.ability_count, config.ability_embedding_dim, padding_idx=0
+            config.ability_count,
+            config.ability_embedding_dim,
+            padding_idx=0,
         )
         self.status_embedding = nn.Embedding(
-            config.status_count, config.status_embedding_dim, padding_idx=0
+            config.status_count,
+            config.status_embedding_dim,
+            padding_idx=0,
         )
 
         self.side_embedding = nn.Embedding(2, 4)
@@ -33,20 +49,32 @@ class PokemonEncoder(nn.Module):
         input_dim = (
             2 * config.species_embedding_dim
             + config.form_embedding_dim
-            + 4 * config.move_embedding_dim
+            + MOVES_PER_POKEMON * config.move_embedding_dim
+
+            + MOVES_PER_POKEMON * TYPE_COUNT
+            + MOVES_PER_POKEMON * MOVE_CATEGORY_COUNT
+            + MOVES_PER_POKEMON * MOVE_NUMERIC_DIM
+
             + config.item_embedding_dim
             + config.ability_embedding_dim
             + config.status_embedding_dim
             + 4
             + numeric_feature_count
-            + 18 # Pokemon types
-            + 6 # Base stats
+
+            + TYPE_COUNT
+            + BASE_STATS_DIM
         )
 
         self.network = nn.Sequential(
-            nn.Linear(input_dim, config.pokemon_hidden_dim),
+            nn.Linear(
+                input_dim,
+                config.pokemon_hidden_dim,
+            ),
             nn.ReLU(),
-            nn.Linear(config.pokemon_hidden_dim, config.pokemon_output_dim),
+            nn.Linear(
+                config.pokemon_hidden_dim,
+                config.pokemon_output_dim,
+            ),
             nn.ReLU(),
         )
 
@@ -59,6 +87,9 @@ class PokemonEncoder(nn.Module):
         pokemon_types: Tensor,
         pokemon_base_stats: Tensor,
         moves: Tensor,
+        move_types: Tensor,
+        move_categories: Tensor,
+        move_numeric: Tensor,
         item: Tensor,
         ability: Tensor,
         status: Tensor,
@@ -67,16 +98,35 @@ class PokemonEncoder(nn.Module):
         batch_size = species.shape[0]
 
         side = torch.tensor(
-            [0] * 6 + [1] * 6, dtype=torch.long, device=species.device
+            [0] * 6 + [1] * 6,
+            dtype=torch.long,
+            device=species.device,
         )
-        side = side.unsqueeze(0).expand(batch_size, -1)
+        side = side.unsqueeze(0).expand(
+            batch_size,
+            -1,
+        )
 
-        base_species_emb = self.species_embedding(base_species)
-        species_emb = self.species_embedding(species)
-        form_emb = self.form_embedding(form)
+        base_species_emb = self.species_embedding(
+            base_species
+        )
+        species_emb = self.species_embedding(
+            species
+        )
+        form_emb = self.form_embedding(
+            form
+        )
 
         moves_emb = self.move_embedding(moves)
         moves_emb = moves_emb.flatten(start_dim=-2)
+
+        move_types = move_types.flatten(start_dim=-2)
+        move_categories = move_categories.flatten(
+            start_dim=-2
+        )
+        move_numeric = move_numeric.flatten(
+            start_dim=-2
+        )
 
         item_emb = self.item_embedding(item)
         ability_emb = self.ability_embedding(ability)
@@ -88,11 +138,17 @@ class PokemonEncoder(nn.Module):
                 base_species_emb,
                 species_emb,
                 form_emb,
+
                 moves_emb,
+                move_types,
+                move_categories,
+                move_numeric,
+
                 item_emb,
                 ability_emb,
                 status_emb,
                 side_emb,
+
                 numeric,
                 pokemon_types,
                 pokemon_base_stats,
@@ -101,8 +157,6 @@ class PokemonEncoder(nn.Module):
         )
 
         return self.network(x)
-
-
 class SimplifiedHistoryEncoder(nn.Module):
     def __init__(self, config: ModelConfig, numeric_feature_count: int) -> None:
         super().__init__()
