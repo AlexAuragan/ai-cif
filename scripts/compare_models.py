@@ -158,8 +158,23 @@ def _tensors_from_json(data: dict[str, object]) -> BattleTensors:
         form_ids=torch.tensor(
             _require_list(data, "form_ids"), dtype=torch.long
         ),
+        pokemon_types=torch.tensor(
+            _require_list(data, "pokemon_types"), dtype=torch.float32
+        ),
+        pokemon_base_stats=torch.tensor(
+            _require_list(data, "pokemon_base_stats"), dtype=torch.float32
+        ),
         move_ids=torch.tensor(
             _require_list(data, "move_ids"), dtype=torch.long
+        ),
+        move_types=torch.tensor(
+            _require_list(data, "move_types"), dtype=torch.float32
+        ),
+        move_categories=torch.tensor(
+            _require_list(data, "move_categories"), dtype=torch.float32
+        ),
+        move_numeric=torch.tensor(
+            _require_list(data, "move_numeric"), dtype=torch.float32
         ),
         item_ids=torch.tensor(
             _require_list(data, "item_ids"), dtype=torch.long

@@ -77,3 +77,30 @@ POOL_TYPES = {
     "win_rate_threshold": float,
     "random_share_increment": float,
 }
+
+
+## DTPO
+DTPO_TYPES = {
+    "learning_rate": float,
+    "clip_epsilon": float,
+    "gamma": float,
+    "max_depth": int,
+    "max_leaf_nodes": int,
+    "policy_updates": int,
+    "value_hidden_dim": int,
+    "value_learning_rate": float,
+    "value_epochs": int,
+    "value_minibatch_size": int,
+    "normalize_advantage": bool,
+}
+
+DTPO_RUNNING_TYPES = {
+    "url": str,
+    "format": str,
+    "checkpoint_dir": Path,
+    "device": str,
+    "wandb_enabled": bool,
+    "wandb_project": str,
+    "wandb_entity": str,
+    "wandb_name": str,
+}

@@ -69,6 +69,8 @@ def load_checkpoint(
     iteration = checkpoint.get("iteration", 0)
 
     if isinstance(iteration, bool) or not isinstance(iteration, int):
-        raise TypeError(f"Checkpoint {path} has invalid iteration {iteration!r}")
+        raise TypeError(
+            f"Checkpoint {path} has invalid iteration {iteration!r}"
+        )
 
     return iteration

@@ -64,23 +64,17 @@ class BattleModel(nn.Module):
             nn.Linear(config.trunk_output_dim, 1), nn.Tanh()
         )
 
-    def forward(
-        self,
-        batch: BattleBatch,
-    ) -> tuple[Tensor, Tensor]:
+    def forward(self, batch: BattleBatch) -> tuple[Tensor, Tensor]:
         pokemon = self.pokemon_encoder(
             base_species=batch.base_species_ids,
             species=batch.species_ids,
             form=batch.form_ids,
-
             pokemon_types=batch.pokemon_types,
             pokemon_base_stats=batch.pokemon_base_stats,
-
             moves=batch.move_ids,
             move_types=batch.move_types,
             move_categories=batch.move_categories,
             move_numeric=batch.move_numeric,
-
             item=batch.item_ids,
             ability=batch.ability_ids,
             status=batch.status_ids,
@@ -90,8 +84,7 @@ class BattleModel(nn.Module):
         pokemon = pokemon.flatten(start_dim=1)
 
         field = self.field_encoder(
-            weather=batch.weather_id,
-            numeric=batch.field_numeric,
+            weather=batch.weather_id, numeric=batch.field_numeric
         )
 
         history = self.history_encoder(
@@ -106,27 +99,20 @@ class BattleModel(nn.Module):
             length=batch.history_length,
         )
 
-        state = torch.cat(
-            (
-                pokemon,
-                field,
-                history,
-            ),
-            dim=-1,
-        )
+        state = torch.cat((pokemon, field, history), dim=-1)
 
         hidden = self.trunk(state)
 
         logits = self.policy_head(hidden)
 
         logits = logits.masked_fill(
-            ~batch.action_mask.bool(),
-            torch.finfo(logits.dtype).min,
+            ~batch.action_mask.bool(), torch.finfo(logits.dtype).min
         )
 
         value = self.value_head(hidden).squeeze(-1)
 
         return logits, value
+
 
 def create_battle_model(
     *,

@@ -1,8 +1,12 @@
 from random import random
 from typing import override
 
-from showdown_sdk.classes.combat_handler import AsyncBaseCombatHandler, AsyncRandomMoveCombatHandler, AsyncSimpleHeuristicsCombatHandler
 import torch
+from showdown_sdk.classes.combat_handler import (
+    AsyncBaseCombatHandler,
+    AsyncRandomMoveCombatHandler,
+    AsyncSimpleHeuristicsCombatHandler,
+)
 from showdown_sdk.features import battle_to_features
 from showdown_sdk.models.sdk import BattleState
 
@@ -120,13 +124,13 @@ class TrainingCombatHandler(NeuralCombatHandler):
 
         return [self._decode_action(index) for index in ranked_indices]
 
+
 class AsyncSemiRandomCombatHandler(AsyncBaseCombatHandler):
     def __init__(self, random_share: float) -> None:
         super().__init__()
         self.random_share: float = random_share
         self.random_ch = AsyncRandomMoveCombatHandler()
         self.simple_ch = AsyncSimpleHeuristicsCombatHandler()
-
 
     @override
     async def async_select_top_actions(
@@ -139,4 +143,6 @@ class AsyncSemiRandomCombatHandler(AsyncBaseCombatHandler):
     @override
     @staticmethod
     async def async_select_team_order() -> list[int]:
-        return await AsyncSimpleHeuristicsCombatHandler().async_select_team_order()
+        return (
+            await AsyncSimpleHeuristicsCombatHandler().async_select_team_order()
+        )

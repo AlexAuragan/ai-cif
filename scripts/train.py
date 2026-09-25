@@ -94,14 +94,16 @@ PPO_CONFIG = PPOConfig(
     value_coef=0.5,
     entropy_coef=0.01,
     max_grad_norm=0.5,
-    epochs=2,
+    epochs=3,
     minibatch_size=256,
     kl_target=0.02,
     kl_ratio_threshold=2,
+    gamma = 1,
+    gae_lambda = 0.95
 )
 
 TRAINING_CONFIG = TrainingConfig(
-    iterations=200,
+    iterations=590,
     rollout_battles=1000,
     eval_battles=1000,
     eval_interval=10,
@@ -109,9 +111,7 @@ TRAINING_CONFIG = TrainingConfig(
 )
 
 POOL_CONFIG = PoolConfig(
-    semi_random_share=0.8,
-    win_rate_threshold=0.75,
-    random_share_increment=0.1,
+    semi_random_share=0.8, win_rate_threshold=0.75, random_share_increment=0.05
 )
 
 RUNNING_CONFIG = RunningConfig(
@@ -824,11 +824,15 @@ async def train(
         _running_config["checkpoint_dir"] = str(
             _running_config["checkpoint_dir"]
         )
+        resume = "must" if args.wandb_id is not None else None
         wandb_run = wandb.init(
             project=running_config.wandb_project,
             entity=running_config.wandb_entity,
             group=args.wandb_group,
             name=args.wandb_name,
+            id=args.wandb_id,
+            resume=resume,
+            resume_from=args.starting_iteration,
             config={
                 "running": _running_config,
                 "training": asdict(training_config),
@@ -890,63 +894,68 @@ async def train(
         ) as temporary_directory_string:
             temporary_directory = Path(temporary_directory_string)
 
-            print()
-            print("Initial evaluation")
-            print("------------------")
+            best_eval_win_rate = 0
+            if args.starting_weights is None:
+                print()
+                print("Initial evaluation")
+                print("------------------")
 
-            phase_id += 1
-            inference_broker.reset_stats()
-            evaluation_start = perf_counter()
+                phase_id += 1
+                inference_broker.reset_stats()
+                evaluation_start = perf_counter()
 
-            wins, losses, ties = await evaluate_multiprocess(
-                pool=pool,
-                url=running_config.url,
-                fmt=running_config.format,
-                team_seed=training_config.team_seed,
-                battles=training_config.eval_battles,
-                worker_count=running_config.workers,
-                battle_lanes=running_config.battle_lanes,
-                phase_id=phase_id,
-                tensorizer=tensorizer,
-                pool_config=pool_config,
-            )
-
-            evaluation_seconds = perf_counter() - evaluation_start
-            initial_inference_stats = inference_broker.snapshot_stats()
-            initial_win_rate = wins / training_config.eval_battles
-            best_eval_win_rate = initial_win_rate
-
-            print_gpu_inference_stats("gpu_inference", initial_inference_stats)
-
-            if wandb_run is not None:
-                wandb_run.log(
-                    {
-                        "eval/wins": wins,
-                        "eval/losses": losses,
-                        "eval/ties": ties,
-                        "eval/win_rate": initial_win_rate,
-                        "eval/best_win_rate": best_eval_win_rate,
-                        "pool/semi_random_share": (
-                            pool_config.semi_random_share
-                        ),
-                        "eval/seconds": evaluation_seconds,
-                        "eval/battles_per_second": (
-                            training_config.eval_battles / evaluation_seconds
-                        ),
-                        "gpu_inference/requests": initial_inference_stats.requests,
-                        "gpu_inference/batches": initial_inference_stats.batches,
-                        "gpu_inference/mean_batch_size": (
-                            initial_inference_stats.mean_batch_size
-                        ),
-                        "gpu_inference/max_batch_size": (
-                            initial_inference_stats.max_batch_size
-                        ),
-                        "gpu_inference/seconds": (
-                            initial_inference_stats.total_inference_seconds
-                        ),
-                    },
-                    step=start_iteration,
+                wins, losses, ties = await evaluate_multiprocess(
+                    pool=pool,
+                    url=running_config.url,
+                    fmt=running_config.format,
+                    team_seed=training_config.team_seed,
+                    battles=training_config.eval_battles,
+                    worker_count=running_config.workers,
+                    battle_lanes=running_config.battle_lanes,
+                    phase_id=phase_id,
+                    tensorizer=tensorizer,
+                    pool_config=pool_config,
                 )
+
+                evaluation_seconds = perf_counter() - evaluation_start
+                initial_inference_stats = inference_broker.snapshot_stats()
+                initial_win_rate = wins / training_config.eval_battles
+                best_eval_win_rate = initial_win_rate
+
+                print_gpu_inference_stats(
+                    "gpu_inference", initial_inference_stats
+                )
+
+                if wandb_run is not None:
+                    wandb_run.log(
+                        {
+                            "eval/wins": wins,
+                            "eval/losses": losses,
+                            "eval/ties": ties,
+                            "eval/win_rate": initial_win_rate,
+                            "eval/best_win_rate": best_eval_win_rate,
+                            "pool/semi_random_share": (
+                                pool_config.semi_random_share
+                            ),
+                            "eval/seconds": evaluation_seconds,
+                            "eval/battles_per_second": (
+                                training_config.eval_battles
+                                / evaluation_seconds
+                            ),
+                            "gpu_inference/requests": initial_inference_stats.requests,
+                            "gpu_inference/batches": initial_inference_stats.batches,
+                            "gpu_inference/mean_batch_size": (
+                                initial_inference_stats.mean_batch_size
+                            ),
+                            "gpu_inference/max_batch_size": (
+                                initial_inference_stats.max_batch_size
+                            ),
+                            "gpu_inference/seconds": (
+                                initial_inference_stats.total_inference_seconds
+                            ),
+                        },
+                        step=start_iteration,
+                    )
 
             for iteration in range(
                 start_iteration + 1,
@@ -1097,6 +1106,7 @@ async def train(
                     phase_id += 1
                     inference_broker.reset_stats()
                     evaluation_start = perf_counter()
+                    evaluated_share = pool_config.semi_random_share
 
                     (
                         eval_wins,
@@ -1178,6 +1188,8 @@ async def train(
                             "eval_gpu_inference/seconds": (
                                 eval_inference_stats.total_inference_seconds
                             ),
+                            "eval/opponent_random_share": evaluated_share,
+                            "pool/next_random_share": pool_config.semi_random_share,
                         }
                     )
 
@@ -1202,10 +1214,6 @@ async def train(
                         optimizer=optimizer,
                         iteration=iteration,
                     )
-
-                log_data["pool/semi_random_share"] = (
-                    pool_config.semi_random_share
-                )
 
                 if wandb_run is not None:
                     wandb_run.log(log_data, step=iteration)
@@ -1263,6 +1271,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wandb-name", default=None)
     parser.add_argument("--no-wandb", action="store_true")
     parser.add_argument("--wandb-group", default=None)
+    parser.add_argument("--wandb-id", default=None)
 
     parser.add_argument("--starting-weights", type=Path, default=None)
     parser.add_argument("--starting-iteration", type=int, default=None)

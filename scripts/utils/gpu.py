@@ -11,11 +11,15 @@ import torch
 from ai_cif.model.model import BattleModel
 from ai_cif.vectorization.tensorizer import (
     ACTION_COUNT,
+    BASE_STATS_DIM,
     FIELD_NUMERIC_DIM,
     HISTORY_NUMERIC_DIM,
+    MOVE_CATEGORY_COUNT,
+    MOVE_NUMERIC_DIM,
     MOVES_PER_POKEMON,
     POKEMON_NUMERIC_DIM,
     POKEMON_SLOTS,
+    TYPE_COUNT,
     BattleBatch,
     BattleTensors,
 )
@@ -72,17 +76,20 @@ class GpuInferenceStats:
 
 @dataclass(frozen=True)
 class SharedBattleBuffer:
-    """Preallocated shared-memory observation slots.
-
-    Each concurrently active battle lane owns one slot. A lane writes its
-    BattleTensors into that slot, queues a tiny InferenceRequest, then awaits
-    the response before reusing the slot.
-    """
+    """Preallocated shared-memory observation slots."""
 
     base_species_ids: torch.Tensor
     species_ids: torch.Tensor
     form_ids: torch.Tensor
+
+    pokemon_types: torch.Tensor
+    pokemon_base_stats: torch.Tensor
+
     move_ids: torch.Tensor
+    move_types: torch.Tensor
+    move_categories: torch.Tensor
+    move_numeric: torch.Tensor
+
     item_ids: torch.Tensor
     ability_ids: torch.Tensor
     status_ids: torch.Tensor
@@ -109,6 +116,7 @@ class SharedBattleBuffer:
     def create(cls, *, slot_count: int, max_history: int) -> SharedBattleBuffer:
         if slot_count <= 0:
             raise ValueError("slot_count must be > 0")
+
         if max_history <= 0:
             raise ValueError("max_history must be > 0")
 
@@ -126,8 +134,26 @@ class SharedBattleBuffer:
             ),
             species_ids=shared_zeros((slots, POKEMON_SLOTS), dtype=torch.long),
             form_ids=shared_zeros((slots, POKEMON_SLOTS), dtype=torch.long),
+            pokemon_types=shared_zeros(
+                (slots, POKEMON_SLOTS, TYPE_COUNT), dtype=torch.float32
+            ),
+            pokemon_base_stats=shared_zeros(
+                (slots, POKEMON_SLOTS, BASE_STATS_DIM), dtype=torch.float32
+            ),
             move_ids=shared_zeros(
                 (slots, POKEMON_SLOTS, MOVES_PER_POKEMON), dtype=torch.long
+            ),
+            move_types=shared_zeros(
+                (slots, POKEMON_SLOTS, MOVES_PER_POKEMON, TYPE_COUNT),
+                dtype=torch.float32,
+            ),
+            move_categories=shared_zeros(
+                (slots, POKEMON_SLOTS, MOVES_PER_POKEMON, MOVE_CATEGORY_COUNT),
+                dtype=torch.float32,
+            ),
+            move_numeric=shared_zeros(
+                (slots, POKEMON_SLOTS, MOVES_PER_POKEMON, MOVE_NUMERIC_DIM),
+                dtype=torch.float32,
             ),
             item_ids=shared_zeros((slots, POKEMON_SLOTS), dtype=torch.long),
             ability_ids=shared_zeros((slots, POKEMON_SLOTS), dtype=torch.long),
@@ -168,7 +194,17 @@ class SharedBattleBuffer:
         self.base_species_ids[slot_index].copy_(observation.base_species_ids)
         self.species_ids[slot_index].copy_(observation.species_ids)
         self.form_ids[slot_index].copy_(observation.form_ids)
+
+        self.pokemon_types[slot_index].copy_(observation.pokemon_types)
+        self.pokemon_base_stats[slot_index].copy_(
+            observation.pokemon_base_stats
+        )
+
         self.move_ids[slot_index].copy_(observation.move_ids)
+        self.move_types[slot_index].copy_(observation.move_types)
+        self.move_categories[slot_index].copy_(observation.move_categories)
+        self.move_numeric[slot_index].copy_(observation.move_numeric)
+
         self.item_ids[slot_index].copy_(observation.item_ids)
         self.ability_ids[slot_index].copy_(observation.ability_ids)
         self.status_ids[slot_index].copy_(observation.status_ids)
@@ -201,7 +237,12 @@ class SharedBattleBuffer:
             base_species_ids=self.base_species_ids.index_select(0, indices),
             species_ids=self.species_ids.index_select(0, indices),
             form_ids=self.form_ids.index_select(0, indices),
+            pokemon_types=self.pokemon_types.index_select(0, indices),
+            pokemon_base_stats=self.pokemon_base_stats.index_select(0, indices),
             move_ids=self.move_ids.index_select(0, indices),
+            move_types=self.move_types.index_select(0, indices),
+            move_categories=self.move_categories.index_select(0, indices),
+            move_numeric=self.move_numeric.index_select(0, indices),
             item_ids=self.item_ids.index_select(0, indices),
             ability_ids=self.ability_ids.index_select(0, indices),
             status_ids=self.status_ids.index_select(0, indices),

@@ -24,6 +24,7 @@ class RunningConfig:
     gpu_batch_size: int = 32
     gpu_batch_wait_ms: float = 0.5
 
+
 @dataclass
 class PoolConfig:
     semi_random_share: float

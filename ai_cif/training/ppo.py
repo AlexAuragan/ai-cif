@@ -22,6 +22,10 @@ class PPOConfig:
     kl_target: float = 0.2
     kl_ratio_threshold: float | None = None
 
+    # GAE
+    gamma: float = 1.0
+    gae_lambda: float = 0.95
+
 
 @dataclass(frozen=True)
 class PPOMetrics:
@@ -38,6 +42,54 @@ class PPOMetrics:
 
     mean_value: float
     mean_return: float
+
+
+def compute_gae(
+    rollout: PackedRollout, gamma: float, gae_lambda: float
+) -> tuple[torch.Tensor, torch.Tensor]:
+    advantages = torch.empty_like(rollout.old_values)
+    returns = torch.empty_like(rollout.old_values)
+
+    offset = 0
+
+    for trajectory_index, trajectory_length_tensor in enumerate(
+        rollout.trajectory_lengths
+    ):
+        trajectory_length = int(trajectory_length_tensor.item())
+        end = offset + trajectory_length
+
+        values = rollout.old_values[offset:end]
+        terminal_reward = rollout.rewards[trajectory_index]
+
+        next_value = torch.tensor(0.0, dtype=values.dtype, device=values.device)
+        next_advantage = torch.tensor(
+            0.0, dtype=values.dtype, device=values.device
+        )
+
+        for local_index in range(trajectory_length - 1, -1, -1):
+            is_terminal = local_index == trajectory_length - 1
+
+            reward = (
+                terminal_reward
+                if is_terminal
+                else torch.tensor(0.0, dtype=values.dtype, device=values.device)
+            )
+
+            value = values[local_index]
+
+            delta = reward + gamma * next_value - value
+
+            advantage = delta + gamma * gae_lambda * next_advantage
+
+            advantages[offset + local_index] = advantage
+            returns[offset + local_index] = advantage + value
+
+            next_value = value
+            next_advantage = advantage
+
+        offset = end
+
+    return advantages, returns
 
 
 def ppo_update(
@@ -57,10 +109,9 @@ def ppo_update(
     if rollout.decision_count == 0:
         raise ValueError("No decisions to train on")
 
-    old_values = rollout.old_values
-    returns_cpu = rollout.returns
-
-    advantages_cpu = returns_cpu - old_values
+    advantages_cpu, returns_cpu = compute_gae(
+        rollout, gamma=config.gamma, gae_lambda=config.gae_lambda
+    )
 
     if advantages_cpu.numel() > 1:
         advantages_cpu = (advantages_cpu - advantages_cpu.mean()) / (
@@ -68,24 +119,10 @@ def ppo_update(
         )
 
     actions = rollout.actions.to(device)
-
     old_log_probs = rollout.old_log_probs.to(device)
-
-    old_values = rollout.old_values
-    returns_cpu = rollout.returns
+    old_values = rollout.old_values.to(device)
     returns = returns_cpu.to(device)
-
-    actions = actions.to(device)
-    old_log_probs = rollout.old_log_probs.to(device)
-    old_values = old_values.to(device)
-    returns = returns.to(device)
-
-    advantages = returns - old_values
-
-    if advantages.numel() > 1:
-        advantages = (advantages - advantages.mean()) / (
-            advantages.std(unbiased=False) + 1e-8
-        )
+    advantages = advantages_cpu.to(device)
 
     count = rollout.decision_count
 
