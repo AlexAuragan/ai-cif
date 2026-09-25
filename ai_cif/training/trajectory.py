@@ -40,7 +40,6 @@ class PackedRollout:
     actions: Tensor
     old_log_probs: Tensor
     old_values: Tensor
-    returns: Tensor
 
     trajectory_lengths: Tensor
     outcomes: Tensor
@@ -55,7 +54,6 @@ class PackedRollout:
             "actions": self.actions,
             "old_log_probs": self.old_log_probs,
             "old_values": self.old_values,
-            "returns": self.returns,
         }
 
         for name, tensor in decision_tensors.items():
@@ -167,14 +165,11 @@ class PackedRollout:
 
         rewards_tensor = torch.tensor(rewards, dtype=torch.float32)
 
-        returns = torch.repeat_interleave(rewards_tensor, trajectory_lengths)
-
         return cls(
             observations=observations,
             actions=actions,
             old_log_probs=old_log_probs,
             old_values=old_values,
-            returns=returns,
             trajectory_lengths=trajectory_lengths,
             outcomes=outcomes_tensor,
             rewards=rewards_tensor,
@@ -195,7 +190,6 @@ class PackedRollout:
                 [chunk.old_log_probs for chunk in chunks], dim=0
             ),
             old_values=torch.cat([chunk.old_values for chunk in chunks], dim=0),
-            returns=torch.cat([chunk.returns for chunk in chunks], dim=0),
             trajectory_lengths=torch.cat(
                 [chunk.trajectory_lengths for chunk in chunks], dim=0
             ),

@@ -5,7 +5,7 @@ import os
 import tempfile
 from concurrent.futures import ProcessPoolExecutor
 from copy import copy
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -59,10 +59,12 @@ from scripts.utils.config import (
     RUNNING_TYPES,
     TRAINING_TYPES,
 )
+from scripts.utils.exceptions import FailureCircuitBreaker, RolloutCircuitOpen
 from scripts.utils.gpu import (
     BatchedGpuInferenceBroker,
     GpuInferenceStats,
     PendingInference,
+    ProcessQueue,
     SharedBattleBuffer,
     WorkerInferenceStats,
     gpu_worker_initializer,
@@ -92,9 +94,9 @@ PPO_CONFIG = PPOConfig(
     learning_rate=3e-4,
     clip_epsilon=0.2,
     value_coef=0.5,
-    entropy_coef=0.01,
+    entropy_coef=0.02,
     max_grad_norm=0.5,
-    epochs=3,
+    epochs=4,
     minibatch_size=256,
     kl_target=0.02,
     kl_ratio_threshold=2,
@@ -103,7 +105,7 @@ PPO_CONFIG = PPOConfig(
 )
 
 TRAINING_CONFIG = TrainingConfig(
-    iterations=590,
+    iterations=1000,
     rollout_battles=1000,
     eval_battles=1000,
     eval_interval=10,
@@ -111,13 +113,13 @@ TRAINING_CONFIG = TrainingConfig(
 )
 
 POOL_CONFIG = PoolConfig(
-    semi_random_share=0.8, win_rate_threshold=0.75, random_share_increment=0.05
+    semi_random_share=1, win_rate_threshold=0.75, random_share_increment=0.05
 )
 
 RUNNING_CONFIG = RunningConfig(
     url=DEFAULT_WEBSOCKET_URL,
-    format="gen1randombattle",
-    workers=26,
+    format="gen4randombattle",
+    workers=25,
     threads=2,
     checkpoint_dir=Path("checkpoints"),
     wandb_project="ai-cif",
@@ -142,6 +144,101 @@ MODEL_CONFIG = ModelConfig(
     history_reason_count=CANT_REASON_VOCAB_SIZE,
 )
 
+@dataclass
+class RolloutRuntime:
+    pool: ProcessPoolExecutor
+    inference_broker: BatchedGpuInferenceBroker
+    request_queue: ProcessQueue
+    response_queues: list[ProcessQueue]
+    shared_buffer: SharedBattleBuffer
+
+
+def create_rollout_runtime(
+    *,
+    context,
+    model: BattleModel,
+    device: torch.device,
+    running_config: RunningConfig,
+    tensorizer: BattleTensorizer,
+) -> RolloutRuntime:
+    slot_count = running_config.workers * running_config.battle_lanes
+
+    request_queue = context.Queue(
+        maxsize=max(
+            slot_count * 2,
+            running_config.gpu_batch_size * 2,
+        )
+    )
+
+    response_queues = [
+        context.Queue(
+            maxsize=max(
+                running_config.battle_lanes * 2,
+                8,
+            )
+        )
+        for _ in range(running_config.workers)
+    ]
+
+    shared_buffer = SharedBattleBuffer.create(
+        slot_count=slot_count,
+        max_history=tensorizer.max_history,
+    )
+
+    inference_broker = BatchedGpuInferenceBroker(
+        model=model,
+        device=device,
+        request_queue=request_queue,
+        response_queues=response_queues,
+        shared_buffer=shared_buffer,
+        max_batch_size=running_config.gpu_batch_size,
+        batch_wait_ms=running_config.gpu_batch_wait_ms,
+    )
+
+    inference_broker.start()
+
+    pool = ProcessPoolExecutor(
+        max_workers=running_config.workers,
+        mp_context=context,
+        initializer=gpu_worker_initializer,
+        initargs=(
+            running_config.threads,
+            request_queue,
+            response_queues,
+            shared_buffer,
+        ),
+    )
+
+    return RolloutRuntime(
+        pool=pool,
+        inference_broker=inference_broker,
+        request_queue=request_queue,
+        response_queues=response_queues,
+        shared_buffer=shared_buffer,
+    )
+
+
+def stop_rollout_runtime(
+    runtime: RolloutRuntime,
+    *,
+    terminate_workers: bool,
+) -> None:
+    if terminate_workers:
+        runtime.pool.terminate_workers()
+    else:
+        runtime.pool.shutdown(
+            wait=True,
+            cancel_futures=True,
+        )
+
+    runtime.inference_broker.stop()
+
+    runtime.request_queue.close()
+    runtime.request_queue.join_thread()
+
+    for response_queue in runtime.response_queues:
+        response_queue.close()
+        response_queue.join_thread()
 
 def create_model(
     device: torch.device, model_config: ModelConfig
@@ -172,7 +269,6 @@ def print_gpu_inference_stats(label: str, stats: GpuInferenceStats) -> None:
 
 
 async def collect_trajectories(
-    *,
     neural_client: Client,
     random_client: Client,
     handler: AsyncTrainingCombatHandler,
@@ -181,6 +277,7 @@ async def collect_trajectories(
     team_generator_2: BaseTeamGenerator | None,
     battles: int,
     reward_config: RewardConfig,
+    circuit_breaker: FailureCircuitBreaker,
 ) -> list[Trajectory]:
     if neural_client.username is None:
         raise RuntimeError("Neural client has no username")
@@ -221,6 +318,8 @@ async def collect_trajectories(
                 return_exceptions=True,
             )
 
+            await circuit_breaker.record_failure(error)
+
             await asyncio.gather(
                 neural_client.ensure_connected(),
                 random_client.ensure_connected(),
@@ -231,7 +330,6 @@ async def collect_trajectories(
         outcome = outcome_for(result, neural_client.username)
 
         breakdown = breakdown_for(result, outcome, config=reward_config)
-
         trajectory = handler.finish_battle(outcome, breakdown)
 
         if not trajectory.decisions:
@@ -313,6 +411,7 @@ async def _rollout_lane(
     pool_config: PoolConfig,
     pending: PendingInference,
     inference_stats: WorkerInferenceStats,
+    circuit_breaker: FailureCircuitBreaker,
 ) -> list[Trajectory]:
     slot_index = worker_index * battle_lanes + lane_index
     infer = make_remote_infer(
@@ -358,6 +457,7 @@ async def _rollout_lane(
             team_generator_2=team_generator_2,
             battles=battles,
             reward_config=reward_config,
+            circuit_breaker=circuit_breaker
         )
 
     finally:
@@ -389,6 +489,11 @@ async def _rollout_worker_async(
     pump_task = asyncio.create_task(
         response_pump(worker_index=worker_index, pending=pending)
     )
+    circuit_breaker = FailureCircuitBreaker(
+        max_failures=5,
+        window_seconds=15.0,
+        cooldown_seconds=2.0,
+    )
 
     try:
         tasks = [
@@ -407,6 +512,7 @@ async def _rollout_worker_async(
                     pool_config=pool_config,
                     pending=pending,
                     inference_stats=inference_stats,
+                    circuit_breaker=circuit_breaker
                 )
             )
             for lane_index, count in enumerate(lane_counts)
@@ -759,6 +865,7 @@ async def train(
         raise RuntimeError("train_gpu.py requires a CUDA/ROCm PyTorch device")
 
     device = torch.device("cuda")
+
     max_rollout_concurrency = min(
         training_config.rollout_battles,
         running_config.workers * running_config.battle_lanes,
@@ -772,17 +879,22 @@ async def train(
     print(f"PyTorch threads per rollout process: {running_config.threads}")
     print(f"GPU inference max batch: {running_config.gpu_batch_size}")
     print(
-        f"GPU inference batch wait: {running_config.gpu_batch_wait_ms:.3f} ms"
+        f"GPU inference batch wait: "
+        f"{running_config.gpu_batch_wait_ms:.3f} ms"
     )
 
     model = create_model(device, model_config)
     model.eval()
 
-    parameter_count = sum(parameter.numel() for parameter in model.parameters())
+    parameter_count = sum(
+        parameter.numel()
+        for parameter in model.parameters()
+    )
     print(f"Model parameters: {parameter_count:,}")
 
     optimizer = torch.optim.Adam(
-        model.parameters(), lr=ppo_config.learning_rate
+        model.parameters(),
+        lr=ppo_config.learning_rate,
     )
 
     start_iteration = args.starting_iteration or 0
@@ -824,7 +936,9 @@ async def train(
         _running_config["checkpoint_dir"] = str(
             _running_config["checkpoint_dir"]
         )
+
         resume = "must" if args.wandb_id is not None else None
+
         wandb_run = wandb.init(
             project=running_config.wandb_project,
             entity=running_config.wandb_entity,
@@ -846,66 +960,38 @@ async def train(
         )
 
     context = multiprocessing.get_context("spawn")
-    slot_count = running_config.workers * running_config.battle_lanes
 
-    request_queue = context.Queue(
-        maxsize=max(slot_count * 2, running_config.gpu_batch_size * 2)
-    )
-    response_queues = [
-        context.Queue(maxsize=max(running_config.battle_lanes * 2, 8))
-        for _ in range(running_config.workers)
-    ]
-
-    shared_buffer = SharedBattleBuffer.create(
-        slot_count=slot_count, max_history=tensorizer.max_history
-    )
-
-    inference_broker = BatchedGpuInferenceBroker(
+    runtime = create_rollout_runtime(
+        context=context,
         model=model,
         device=device,
-        request_queue=request_queue,
-        response_queues=response_queues,
-        shared_buffer=shared_buffer,
-        max_batch_size=running_config.gpu_batch_size,
-        batch_wait_ms=running_config.gpu_batch_wait_ms,
+        running_config=running_config,
+        tensorizer=tensorizer,
     )
 
-    pool: ProcessPoolExecutor | None = None
-    pool_terminated = False
+    runtime_stopped = False
     phase_id = 0
 
-    inference_broker.start()
-
     try:
-        pool = ProcessPoolExecutor(
-            max_workers=running_config.workers,
-            mp_context=context,
-            initializer=gpu_worker_initializer,
-            initargs=(
-                running_config.threads,
-                request_queue,
-                response_queues,
-                shared_buffer,
-            ),
-        )
-
         with tempfile.TemporaryDirectory(
             prefix="ai-cif-rollouts-"
         ) as temporary_directory_string:
             temporary_directory = Path(temporary_directory_string)
 
             best_eval_win_rate = 0
+
             if args.starting_weights is None:
                 print()
                 print("Initial evaluation")
                 print("------------------")
 
                 phase_id += 1
-                inference_broker.reset_stats()
+                runtime.inference_broker.reset_stats()
+
                 evaluation_start = perf_counter()
 
                 wins, losses, ties = await evaluate_multiprocess(
-                    pool=pool,
+                    pool=runtime.pool,
                     url=running_config.url,
                     fmt=running_config.format,
                     team_seed=training_config.team_seed,
@@ -917,13 +1003,22 @@ async def train(
                     pool_config=pool_config,
                 )
 
-                evaluation_seconds = perf_counter() - evaluation_start
-                initial_inference_stats = inference_broker.snapshot_stats()
-                initial_win_rate = wins / training_config.eval_battles
+                evaluation_seconds = (
+                    perf_counter() - evaluation_start
+                )
+
+                initial_inference_stats = (
+                    runtime.inference_broker.snapshot_stats()
+                )
+
+                initial_win_rate = (
+                    wins / training_config.eval_battles
+                )
                 best_eval_win_rate = initial_win_rate
 
                 print_gpu_inference_stats(
-                    "gpu_inference", initial_inference_stats
+                    "gpu_inference",
+                    initial_inference_stats,
                 )
 
                 if wandb_run is not None:
@@ -942,8 +1037,12 @@ async def train(
                                 training_config.eval_battles
                                 / evaluation_seconds
                             ),
-                            "gpu_inference/requests": initial_inference_stats.requests,
-                            "gpu_inference/batches": initial_inference_stats.batches,
+                            "gpu_inference/requests": (
+                                initial_inference_stats.requests
+                            ),
+                            "gpu_inference/batches": (
+                                initial_inference_stats.batches
+                            ),
                             "gpu_inference/mean_batch_size": (
                                 initial_inference_stats.mean_batch_size
                             ),
@@ -951,7 +1050,8 @@ async def train(
                                 initial_inference_stats.max_batch_size
                             ),
                             "gpu_inference/seconds": (
-                                initial_inference_stats.total_inference_seconds
+                                initial_inference_stats
+                                .total_inference_seconds
                             ),
                         },
                         step=start_iteration,
@@ -962,33 +1062,84 @@ async def train(
                 start_iteration + training_config.iterations + 1,
             ):
                 phase_id += 1
-                inference_broker.reset_stats()
-                rollout_start = perf_counter()
 
-                trajectories = await collect_trajectories_multiprocess(
-                    pool=pool,
-                    url=running_config.url,
-                    fmt=running_config.format,
-                    team_seed=training_config.team_seed,
-                    battles=training_config.rollout_battles,
-                    worker_count=running_config.workers,
-                    battle_lanes=running_config.battle_lanes,
-                    phase_id=phase_id,
-                    temporary_directory=temporary_directory,
-                    reward_config=reward_config,
-                    tensorizer=tensorizer,
-                    pool_config=pool_config,
-                )
+                while True:
+                    runtime.inference_broker.reset_stats()
+                    rollout_start = perf_counter()
+
+                    try:
+                        trajectories = (
+                            await collect_trajectories_multiprocess(
+                                pool=runtime.pool,
+                                url=running_config.url,
+                                fmt=running_config.format,
+                                team_seed=training_config.team_seed,
+                                battles=training_config.rollout_battles,
+                                worker_count=running_config.workers,
+                                battle_lanes=running_config.battle_lanes,
+                                phase_id=phase_id,
+                                temporary_directory=temporary_directory,
+                                reward_config=reward_config,
+                                tensorizer=tensorizer,
+                                pool_config=pool_config,
+                            )
+                        )
+
+                    except RolloutCircuitOpen as error:
+                        print()
+                        print("=" * 80)
+                        print("ROLLOUT CIRCUIT BREAKER TRIPPED")
+                        print(f"iteration={iteration}")
+                        print(f"phase_id={phase_id}")
+                        print(
+                            f"{type(error).__name__}: {error}"
+                        )
+                        print("=" * 80)
+                        print()
+
+                        stop_rollout_runtime(
+                            runtime,
+                            terminate_workers=True,
+                        )
+                        runtime_stopped = True
+
+                        await asyncio.to_thread(
+                            input,
+                            (
+                                "Restart the Showdown server, then "
+                                "press Enter to retry: "
+                            ),
+                        )
+
+                        phase_id += 1
+
+                        runtime = create_rollout_runtime(
+                            context=context,
+                            model=model,
+                            device=device,
+                            running_config=running_config,
+                            tensorizer=tensorizer,
+                        )
+                        runtime_stopped = False
+
+                        continue
+
+                    break
 
                 rollout_seconds = perf_counter() - rollout_start
-                rollout_inference_stats = inference_broker.snapshot_stats()
 
-                wins, losses, ties, decisions = summarize_trajectories(
-                    trajectories
+                rollout_inference_stats = (
+                    runtime.inference_broker.snapshot_stats()
                 )
+
+                wins, losses, ties, decisions = (
+                    summarize_trajectories(trajectories)
+                )
+
                 mean_reward = mean_trajectory_reward(trajectories)
 
                 ppo_start = perf_counter()
+
                 metrics = ppo_update(
                     model=model,
                     optimizer=optimizer,
@@ -996,33 +1147,48 @@ async def train(
                     config=ppo_config,
                     device=device,
                 )
+
                 ppo_seconds = perf_counter() - ppo_start
 
                 battle_count = trajectories.battle_count
 
                 train_win_rate = wins / battle_count
-
                 mean_decisions = decisions / battle_count
 
                 reward_breakdowns = trajectories.reward_breakdowns
 
-                timestamp = datetime.now(tz=UTC).strftime("%c")
+                timestamp = datetime.now(
+                    tz=UTC
+                ).strftime("%c")
+
                 print()
                 print(timestamp)
+
                 print(
                     f"iteration={iteration} "
                     f"battles={battle_count} "
                     f"decisions={decisions}"
                 )
-                print(f"train wins={wins} losses={losses} ties={ties}")
+
+                print(
+                    f"train wins={wins} "
+                    f"losses={losses} "
+                    f"ties={ties}"
+                )
+
                 print(
                     f"rollout_time={rollout_seconds:.2f}s "
-                    f"battles/s={battle_count / rollout_seconds:.2f} "
-                    f"decisions/s={decisions / rollout_seconds:.1f}"
+                    f"battles/s="
+                    f"{battle_count / rollout_seconds:.2f} "
+                    f"decisions/s="
+                    f"{decisions / rollout_seconds:.1f}"
                 )
+
                 print(f"ppo_time={ppo_seconds:.2f}s")
+
                 print_gpu_inference_stats(
-                    "gpu_inference", rollout_inference_stats
+                    "gpu_inference",
+                    rollout_inference_stats,
                 )
 
                 log_data = {
@@ -1042,8 +1208,12 @@ async def train(
                     "rollout/decisions_per_second": (
                         decisions / rollout_seconds
                     ),
-                    "gpu_inference/requests": rollout_inference_stats.requests,
-                    "gpu_inference/batches": rollout_inference_stats.batches,
+                    "gpu_inference/requests": (
+                        rollout_inference_stats.requests
+                    ),
+                    "gpu_inference/batches": (
+                        rollout_inference_stats.batches
+                    ),
                     "gpu_inference/mean_batch_size": (
                         rollout_inference_stats.mean_batch_size
                     ),
@@ -1051,10 +1221,12 @@ async def train(
                         rollout_inference_stats.max_batch_size
                     ),
                     "gpu_inference/seconds": (
-                        rollout_inference_stats.total_inference_seconds
+                        rollout_inference_stats
+                        .total_inference_seconds
                     ),
                     "gpu_inference/requests_per_inference_second": (
-                        rollout_inference_stats.requests_per_inference_second
+                        rollout_inference_stats
+                        .requests_per_inference_second
                     ),
                     "ppo/seconds": ppo_seconds,
                     "ppo/policy_loss": metrics.policy_loss,
@@ -1065,46 +1237,73 @@ async def train(
                     "ppo/clip_fraction": metrics.clip_fraction,
                     "ppo/mean_value": metrics.mean_value,
                     "ppo/mean_return": metrics.mean_return,
-                    "optimizer/learning_rate": optimizer.param_groups[0]["lr"],
+                    "ppo/explained_variance": metrics.explained_variance,
+                    "optimizer/learning_rate": (
+                        optimizer.param_groups[0]["lr"]
+                    ),
                     "reward/total": (
-                        sum(item.total for item in reward_breakdowns)
+                        sum(
+                            item.total
+                            for item in reward_breakdowns
+                        )
                         / battle_count
                     ),
                     "reward/outcome": (
-                        sum(item.outcome for item in reward_breakdowns)
+                        sum(
+                            item.outcome
+                            for item in reward_breakdowns
+                        )
                         / battle_count
                     ),
                     "reward/own_hp": (
-                        sum(item.own_hp for item in reward_breakdowns)
+                        sum(
+                            item.own_hp
+                            for item in reward_breakdowns
+                        )
                         / battle_count
                     ),
                     "reward/enemy_damage": (
-                        sum(item.enemy_damage for item in reward_breakdowns)
+                        sum(
+                            item.enemy_damage
+                            for item in reward_breakdowns
+                        )
                         / battle_count
                     ),
                     "reward/speed": (
-                        sum(item.speed for item in reward_breakdowns)
+                        sum(
+                            item.speed
+                            for item in reward_breakdowns
+                        )
                         / battle_count
                     ),
                     "battle/own_hp_fraction": (
-                        sum(item.own_hp_fraction for item in reward_breakdowns)
+                        sum(
+                            item.own_hp_fraction
+                            for item in reward_breakdowns
+                        )
                         / battle_count
                     ),
                     "battle/enemy_hp_fraction": (
                         sum(
-                            item.enemy_hp_fraction for item in reward_breakdowns
+                            item.enemy_hp_fraction
+                            for item in reward_breakdowns
                         )
                         / battle_count
                     ),
                     "battle/mean_moves": (
-                        sum(item.move_count for item in reward_breakdowns)
+                        sum(
+                            item.move_count
+                            for item in reward_breakdowns
+                        )
                         / battle_count
                     ),
                 }
 
                 if iteration % training_config.eval_interval == 0:
                     phase_id += 1
-                    inference_broker.reset_stats()
+
+                    runtime.inference_broker.reset_stats()
+
                     evaluation_start = perf_counter()
                     evaluated_share = pool_config.semi_random_share
 
@@ -1113,7 +1312,7 @@ async def train(
                         eval_losses,
                         eval_ties,
                     ) = await evaluate_multiprocess(
-                        pool=pool,
+                        pool=runtime.pool,
                         url=running_config.url,
                         fmt=running_config.format,
                         team_seed=training_config.team_seed,
@@ -1125,24 +1324,42 @@ async def train(
                         pool_config=pool_config,
                     )
 
-                    evaluation_seconds = perf_counter() - evaluation_start
-                    eval_inference_stats = inference_broker.snapshot_stats()
-                    win_rate = eval_wins / training_config.eval_battles
-                    best_eval_win_rate = max(best_eval_win_rate, win_rate)
+                    evaluation_seconds = (
+                        perf_counter() - evaluation_start
+                    )
+
+                    eval_inference_stats = (
+                        runtime.inference_broker.snapshot_stats()
+                    )
+
+                    win_rate = (
+                        eval_wins
+                        / training_config.eval_battles
+                    )
+
+                    best_eval_win_rate = max(
+                        best_eval_win_rate,
+                        win_rate,
+                    )
 
                     if win_rate > pool_config.win_rate_threshold:
-                        previous_share = pool_config.semi_random_share
+                        previous_share = (
+                            pool_config.semi_random_share
+                        )
+
                         pool_config.semi_random_share = max(
                             0,
                             pool_config.semi_random_share
                             - pool_config.random_share_increment,
                         )
+
                         print(
                             f"POOL semi_random_share "
                             f"{previous_share:.1%} -> "
                             f"{pool_config.semi_random_share:.1%} "
                             f"(win_rate={win_rate:.1%} > "
-                            f"threshold={pool_config.win_rate_threshold:.1%})"
+                            f"threshold="
+                            f"{pool_config.win_rate_threshold:.1%})"
                         )
 
                     print(
@@ -1152,13 +1369,16 @@ async def train(
                         f"ties={eval_ties} "
                         f"win_rate={win_rate:.1%}"
                     )
+
                     print(
                         f"eval_time={evaluation_seconds:.2f}s "
                         f"battles/s="
                         f"{training_config.eval_battles / evaluation_seconds:.2f}"
                     )
+
                     print_gpu_inference_stats(
-                        "eval_gpu_inference", eval_inference_stats
+                        "eval_gpu_inference",
+                        eval_inference_stats,
                     )
 
                     log_data.update(
@@ -1167,7 +1387,9 @@ async def train(
                             "eval/losses": eval_losses,
                             "eval/ties": eval_ties,
                             "eval/win_rate": win_rate,
-                            "eval/best_win_rate": best_eval_win_rate,
+                            "eval/best_win_rate": (
+                                best_eval_win_rate
+                            ),
                             "eval/seconds": evaluation_seconds,
                             "eval/battles_per_second": (
                                 training_config.eval_battles
@@ -1186,10 +1408,15 @@ async def train(
                                 eval_inference_stats.max_batch_size
                             ),
                             "eval_gpu_inference/seconds": (
-                                eval_inference_stats.total_inference_seconds
+                                eval_inference_stats
+                                .total_inference_seconds
                             ),
-                            "eval/opponent_random_share": evaluated_share,
-                            "pool/next_random_share": pool_config.semi_random_share,
+                            "eval/opponent_random_share": (
+                                evaluated_share
+                            ),
+                            "pool/next_random_share": (
+                                pool_config.semi_random_share
+                            ),
                         }
                     )
 
@@ -1198,12 +1425,14 @@ async def train(
                         / (args.wandb_name or "local")
                         / f"iteration_{iteration:05d}.pt"
                     )
+
                     save_checkpoint(
                         path=checkpoint,
                         model=model,
                         optimizer=optimizer,
                         iteration=iteration,
                     )
+
                     save_checkpoint(
                         path=(
                             running_config.checkpoint_dir
@@ -1216,30 +1445,31 @@ async def train(
                     )
 
                 if wandb_run is not None:
-                    wandb_run.log(log_data, step=iteration)
+                    wandb_run.log(
+                        log_data,
+                        step=iteration,
+                    )
 
     except BaseException:
-        if pool is not None:
-            pool_terminated = True
-            pool.terminate_workers()
+        if not runtime_stopped:
+            stop_rollout_runtime(
+                runtime,
+                terminate_workers=True,
+            )
+            runtime_stopped = True
+
         raise
 
     finally:
-        if pool is not None and not pool_terminated:
-            pool.shutdown(wait=True, cancel_futures=True)
-
-        inference_broker.stop()
-
-        request_queue.close()
-        request_queue.join_thread()
-
-        for response_queue in response_queues:
-            response_queue.close()
-            response_queue.join_thread()
+        if not runtime_stopped:
+            stop_rollout_runtime(
+                runtime,
+                terminate_workers=False,
+            )
+            runtime_stopped = True
 
         if wandb_run is not None:
             wandb_run.finish()
-
 
 def apply_overrides(
     config, overrides: list[str], types: dict[str, type]

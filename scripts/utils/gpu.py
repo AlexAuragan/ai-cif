@@ -331,10 +331,13 @@ async def response_pump(
         future = pending.pop(key, None)
 
         if future is None:
-            raise RuntimeError(
-                "Received GPU inference response with no pending request: "
-                f"slot={response.slot_index} request={response.request_id}"
+            print(
+                "Discarding stale GPU inference response: "
+                f"worker={worker_index} "
+                f"slot={response.slot_index} "
+                f"request={response.request_id}"
             )
+            continue
 
         if response.error is not None:
             future.set_exception(
@@ -493,6 +496,7 @@ class BatchedGpuInferenceBroker:
         self.batch_wait_seconds = batch_wait_ms / 1000.0
 
         self._thread: threading.Thread | None = None
+        self._stop_event = threading.Event()
         self._stats_lock = threading.Lock()
         self._requests = 0
         self._batches = 0
@@ -503,17 +507,31 @@ class BatchedGpuInferenceBroker:
         if self._thread is not None:
             raise RuntimeError("GPU inference broker is already running")
 
+        self._stop_event.clear()
+
         self._thread = threading.Thread(
-            target=self._run, name="batched-gpu-inference", daemon=True
+            target=self._run,
+            name="batched-gpu-inference",
+            daemon=True,
         )
         self._thread.start()
 
+
     def stop(self) -> None:
         thread = self._thread
+
         if thread is None:
             return
 
-        self.request_queue.put(None)
+        self._stop_event.set()
+
+        while thread.is_alive():
+            try:
+                self.request_queue.put(None, timeout=0.1)
+                break
+            except queue.Full:
+                continue
+
         thread.join(timeout=30.0)
 
         if thread.is_alive():
@@ -642,16 +660,23 @@ class BatchedGpuInferenceBroker:
         dispatch_start = perf_counter()
 
         for index, request in enumerate(requests):
-            self.response_queues[request.worker_index].put(
-                InferenceResponse(
-                    slot_index=request.slot_index,
-                    request_id=request.request_id,
-                    logits=tuple(
-                        float(value) for value in logits_cpu[index].tolist()
-                    ),
-                    value=float(values_cpu[index].item()),
-                )
+            response = InferenceResponse(
+                slot_index=request.slot_index,
+                request_id=request.request_id,
+                logits=tuple(
+                    float(value) for value in logits_cpu[index].tolist()
+                ),
+                value=float(values_cpu[index].item()),
             )
+
+            response_queue = self.response_queues[request.worker_index]
+
+            while not self._stop_event.is_set():
+                try:
+                    response_queue.put(response, timeout=0.1)
+                    break
+                except queue.Full:
+                    continue
 
         dispatch_seconds = perf_counter() - dispatch_start
 
@@ -666,15 +691,24 @@ class BatchedGpuInferenceBroker:
             self._total_dispatch_seconds += dispatch_seconds
 
     def _send_errors(
-        self, requests: list[InferenceRequest], error_text: str
+        self,
+        requests: list[InferenceRequest],
+        error_text: str,
     ) -> None:
         for request in requests:
-            self.response_queues[request.worker_index].put(
-                InferenceResponse(
-                    slot_index=request.slot_index,
-                    request_id=request.request_id,
-                    logits=None,
-                    value=None,
-                    error=error_text,
-                )
+            response = InferenceResponse(
+                slot_index=request.slot_index,
+                request_id=request.request_id,
+                logits=None,
+                value=None,
+                error=error_text,
             )
+
+            response_queue = self.response_queues[request.worker_index]
+
+            while not self._stop_event.is_set():
+                try:
+                    response_queue.put(response, timeout=0.1)
+                    break
+                except queue.Full:
+                    continue

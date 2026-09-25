@@ -43,6 +43,8 @@ class PPOMetrics:
     mean_value: float
     mean_return: float
 
+    explained_variance: float
+
 
 def compute_gae(
     rollout: PackedRollout, gamma: float, gae_lambda: float
@@ -214,6 +216,11 @@ def ppo_update(
 
     model.eval()
 
+    value_explained_variance = explained_variance(
+        old_values,
+        returns,
+    )
+
     return PPOMetrics(
         policy_loss=sum(policy_losses) / (len(policy_losses) or 1),
         value_loss=sum(value_losses) / (len(value_losses) or 1),
@@ -225,4 +232,23 @@ def ppo_update(
         clip_fraction=sum(clip_fractions) / (len(clip_fractions) or 1),
         mean_value=float(old_values.mean().item()),
         mean_return=float(returns.mean().item()),
+        explained_variance=value_explained_variance,
+    )
+
+def explained_variance(
+    predictions: torch.Tensor,
+    targets: torch.Tensor,
+) -> float:
+    target_variance = torch.var(targets, unbiased=False)
+
+    if target_variance <= 1e-8:
+        return 0.0
+
+    residual_variance = torch.var(
+        targets - predictions,
+        unbiased=False,
+    )
+
+    return float(
+        (1.0 - residual_variance / target_variance).item()
     )
