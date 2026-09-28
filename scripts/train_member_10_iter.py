@@ -14,11 +14,12 @@ from collections.abc import Awaitable, Callable
 from concurrent.futures import ProcessPoolExecutor
 from copy import copy
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from functools import partial
 from multiprocessing.queues import Queue as ProcessQueue
 from pathlib import Path
 from time import perf_counter
+from zoneinfo import ZoneInfo
 
 import torch
 from dotenv import load_dotenv
@@ -2140,7 +2141,9 @@ async def train_member(
                 mean_decisions = decisions / battle_count
                 reward_breakdowns = trajectories.reward_breakdowns
 
-                timestamp = datetime.now(tz=UTC).strftime("%c")
+                timestamp = datetime.now(tz=ZoneInfo("Europe/Paris")).strftime(
+                    "%c"
+                )
 
                 print()
                 print(timestamp)

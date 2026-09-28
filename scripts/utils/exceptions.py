@@ -26,9 +26,7 @@ class FailureCircuitBreaker:
         async with self._lock:
             cutoff = now - self.window_seconds
             self._failures = [
-                timestamp
-                for timestamp in self._failures
-                if timestamp >= cutoff
+                timestamp for timestamp in self._failures if timestamp >= cutoff
             ]
             self._failures.append(now)
 

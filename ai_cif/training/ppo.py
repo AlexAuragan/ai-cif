@@ -7,7 +7,7 @@ from ai_cif.model.model import BattleModel
 from ai_cif.training.trajectory import PackedRollout, Trajectory
 
 
-@dataclass(frozen=True)
+@dataclass
 class PPOConfig:
     learning_rate: float = 3e-4
     clip_epsilon: float = 0.2
@@ -216,10 +216,7 @@ def ppo_update(
 
     model.eval()
 
-    value_explained_variance = explained_variance(
-        old_values,
-        returns,
-    )
+    value_explained_variance = explained_variance(old_values, returns)
 
     return PPOMetrics(
         policy_loss=sum(policy_losses) / (len(policy_losses) or 1),
@@ -235,20 +232,15 @@ def ppo_update(
         explained_variance=value_explained_variance,
     )
 
+
 def explained_variance(
-    predictions: torch.Tensor,
-    targets: torch.Tensor,
+    predictions: torch.Tensor, targets: torch.Tensor
 ) -> float:
     target_variance = torch.var(targets, unbiased=False)
 
     if target_variance <= 1e-8:
         return 0.0
 
-    residual_variance = torch.var(
-        targets - predictions,
-        unbiased=False,
-    )
+    residual_variance = torch.var(targets - predictions, unbiased=False)
 
-    return float(
-        (1.0 - residual_variance / target_variance).item()
-    )
+    return float((1.0 - residual_variance / target_variance).item())

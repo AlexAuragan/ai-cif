@@ -9,6 +9,9 @@ PPO_TYPES = {
     "epochs": int,
     "minibatch_size": int,
     "kl_target": float,
+    "kl_ratio_threshold": float,
+    "gae_lambda": float,
+    "gamma": float,
 }
 TRAINING_TYPES = {
     "iterations": int,

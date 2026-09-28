@@ -510,12 +510,9 @@ class BatchedGpuInferenceBroker:
         self._stop_event.clear()
 
         self._thread = threading.Thread(
-            target=self._run,
-            name="batched-gpu-inference",
-            daemon=True,
+            target=self._run, name="batched-gpu-inference", daemon=True
         )
         self._thread.start()
-
 
     def stop(self) -> None:
         thread = self._thread
@@ -691,9 +688,7 @@ class BatchedGpuInferenceBroker:
             self._total_dispatch_seconds += dispatch_seconds
 
     def _send_errors(
-        self,
-        requests: list[InferenceRequest],
-        error_text: str,
+        self, requests: list[InferenceRequest], error_text: str
     ) -> None:
         for request in requests:
             response = InferenceResponse(

@@ -7,10 +7,11 @@ import tempfile
 from concurrent.futures import ProcessPoolExecutor
 from copy import copy
 from dataclasses import asdict
-from datetime import UTC, datetime
+from datetime import datetime
 from functools import partial
 from pathlib import Path
 from time import perf_counter
+from zoneinfo import ZoneInfo
 
 import torch
 from dotenv import load_dotenv
@@ -811,7 +812,9 @@ async def train(
             for iteration in range(1, training_config.iterations + 1):
                 phase_id += 1
 
-                timestamp = datetime.now(tz=UTC).strftime("%c")
+                timestamp = datetime.now(
+                    tz=ZoneInfo("Europe/Paris")
+                ).strftime("%c")
                 print()
                 print(timestamp)
                 print(
