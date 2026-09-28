@@ -72,48 +72,68 @@ def generate_battles() -> None:
     if manifest is None:
         manifest = build_manifest()
 
-    existing_train_per_share = int(manifest.get("train_battles_per_share", 0))
+    # First recover shards that were completely written by an earlier
+    # interrupted run but never made it into manifest.json.
+    for random_share in SEMI_RANDOM_SHARES:
+        share_tag = f"{round(random_share * 100):03d}"
 
-    existing_validation_per_share = int(
-        manifest.get("validation_battles_per_share", 0)
-    )
+        for split, target_count in (
+            ("train", TRAIN_BATTLES_PER_SHARE),
+            ("validation", VALIDATION_BATTLES_PER_SHARE),
+        ):
+            for start in range(0, target_count, SHARD_BATTLES):
+                stop = min(start + SHARD_BATTLES, target_count)
+                expected_battles = stop - start
 
-    if existing_train_per_share > TRAIN_BATTLES_PER_SHARE:
-        raise ValueError(
-            "Existing dataset has more training "
-            "battles per share than requested."
-        )
+                name = f"{split}_share_{share_tag}_{start:06d}.pt"
+                path = DATA_DIR / name
 
-    if existing_validation_per_share > VALIDATION_BATTLES_PER_SHARE:
-        raise ValueError(
-            "Existing dataset has more validation "
-            "battles per share than requested."
-        )
+                if name in manifest[split]:
+                    continue
 
-    missing_train_per_share = TRAIN_BATTLES_PER_SHARE - existing_train_per_share
+                if not path.is_file():
+                    continue
 
-    missing_validation_per_share = (
-        VALIDATION_BATTLES_PER_SHARE - existing_validation_per_share
-    )
+                payload = torch.load(
+                    path,
+                    map_location="cpu",
+                    weights_only=True,
+                )
 
-    if missing_train_per_share == 0 and missing_validation_per_share == 0:
-        print(
-            "Dataset already contains all "
-            f"{TRAIN_BATTLES + VALIDATION_BATTLES} battles."
-        )
-        return
+                battle_ids = payload["battle_ids"]
+                labels = payload["labels"]
 
-    print(
-        f"Existing per share: "
-        f"{existing_train_per_share} train + "
-        f"{existing_validation_per_share} validation"
-    )
+                actual_battles = int(torch.unique(battle_ids).numel())
 
-    print(
-        f"Generating per share: "
-        f"{missing_train_per_share} train + "
-        f"{missing_validation_per_share} validation"
-    )
+                if actual_battles != expected_battles:
+                    raise RuntimeError(
+                        f"Existing orphan shard {path} contains "
+                        f"{actual_battles} battles, expected {expected_battles}"
+                    )
+
+                print(f"Recovering completed shard: {name}")
+
+                manifest[split].append(name)
+                manifest["decisions"] = (
+                    int(manifest.get("decisions", 0))
+                    + int(labels.numel())
+                )
+
+                battle_key = f"{split}_battles"
+                manifest[battle_key] = (
+                    int(manifest.get(battle_key, 0))
+                    + actual_battles
+                )
+
+    for split in ("train", "validation"):
+        manifest[split].sort()
+
+    save_manifest(manifest)
+
+    # Important: calculate this AFTER recovering orphan shards,
+    # otherwise new jobs could reuse their battle IDs.
+    battle_id = next_battle_id(manifest)
+
 
     battle_id = next_battle_id(manifest)
 
@@ -125,54 +145,46 @@ def generate_battles() -> None:
     for share_index, random_share in enumerate(SEMI_RANDOM_SHARES):
         share_tag = f"{round(random_share * 100):03d}"
 
-        for split, existing_count, target_count, new_shards in (
-            (
-                "train",
-                existing_train_per_share,
-                TRAIN_BATTLES_PER_SHARE,
-                new_train_shards,
-            ),
-            (
-                "validation",
-                existing_validation_per_share,
-                VALIDATION_BATTLES_PER_SHARE,
-                new_validation_shards,
-            ),
+        for split, target_count in (
+            ("train", TRAIN_BATTLES_PER_SHARE),
+            ("validation", VALIDATION_BATTLES_PER_SHARE),
         ):
-            for start in range(existing_count, target_count, SHARD_BATTLES):
+            for start in range(0, target_count, SHARD_BATTLES):
                 stop = min(start + SHARD_BATTLES, target_count)
-
                 count = stop - start
 
                 name = f"{split}_share_{share_tag}_{start:06d}.pt"
 
+                # This exact shard is already complete.
+                if name in manifest[split]:
+                    continue
+
                 path = DATA_DIR / name
 
                 if path.exists():
-                    raise FileExistsError(
-                        f"Refusing to overwrite existing shard: {path}"
+                    raise RuntimeError(
+                        f"Shard exists but was not recovered: {path}"
                     )
 
                 battle_ids = list(range(battle_id, battle_id + count))
-
                 battle_id += count
-
-                new_shards.append(name)
 
                 jobs.append(
                     {
                         "path": str(path.resolve()),
+                        "name": name,
+                        "split": split,
                         "battle_ids": battle_ids,
                         "random_share": random_share,
-                        "seed": (SEED + share_index * 100_000 + start),
+                        "seed": (
+                            SEED
+                            + share_index * 100_000
+                            + start
+                        ),
                     }
                 )
 
     random.Random(SEED).shuffle(jobs)
-
-    total_missing = len(SEMI_RANDOM_SHARES) * (
-        missing_train_per_share + missing_validation_per_share
-    )
 
     finished_battles = 0
     new_decisions = 0
@@ -180,14 +192,45 @@ def generate_battles() -> None:
     context = multiprocessing.get_context("spawn")
 
     with ProcessPoolExecutor(max_workers=WORKERS, mp_context=context) as pool:
-        futures = [pool.submit(collect_shard, job) for job in jobs]
+        futures = {
+            pool.submit(collect_shard, job): job
+            for job in jobs
+        }
 
         try:
             for future in as_completed(futures):
-                (battle_count, state_count) = future.result()
+                job = futures[future]
+
+                path, battle_count, state_count = future.result()
 
                 finished_battles += battle_count
                 new_decisions += state_count
+
+                split = job["split"]
+                name = job["name"]
+
+                manifest[split].append(name)
+                manifest[split].sort()
+
+                manifest["decisions"] = (
+                    int(manifest.get("decisions", 0))
+                    + state_count
+                )
+
+                battle_key = f"{split}_battles"
+
+                manifest[battle_key] = (
+                    int(manifest.get(battle_key, 0))
+                    + battle_count
+                )
+
+                # Commit progress immediately.
+                save_manifest(manifest)
+
+                total_missing = sum(
+                    len(job["battle_ids"])
+                    for job in jobs
+                )
 
                 print(
                     f"Collected "
@@ -233,3 +276,9 @@ def generate_battles() -> None:
         )
 
     print(f"Total: {TRAIN_BATTLES + VALIDATION_BATTLES} battles")
+
+def save_manifest(manifest: dict) -> None:
+    (DATA_DIR / "manifest.json").write_text(
+        json.dumps(manifest, indent=2) + "\n",
+        encoding="utf-8",
+    )

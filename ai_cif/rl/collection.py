@@ -55,7 +55,7 @@ async def connect_pair(
     return clients
 
 
-async def collect_shard_async(job: dict) -> tuple[int, int]:
+async def collect_shard_async(job: dict) -> tuple[str, int, int]:
     tensorizer = BattleTensorizer(max_history=MAX_HISTORY, vocab_gen=VOCAB_GEN)
 
     random_share = float(job["random_share"])
@@ -104,7 +104,11 @@ async def collect_shard_async(job: dict) -> tuple[int, int]:
             Path(job["path"]),
         )
 
-        return len(job["battle_ids"]), len(shard_labels)
+        return (
+            job["path"],
+            len(job["battle_ids"]),
+            len(shard_labels),
+        )
 
     finally:
         await asyncio.gather(
@@ -112,7 +116,7 @@ async def collect_shard_async(job: dict) -> tuple[int, int]:
         )
 
 
-def collect_shard(job: dict) -> tuple[int, int]:
+def collect_shard(job: dict) -> tuple[str, int, int]:
     torch.set_num_threads(THREADS_PER_WORKER)
 
     random.seed(job["seed"])

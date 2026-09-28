@@ -56,16 +56,29 @@ class RecordingSemiRandomHandler(AsyncSemiRandomCombatHandler):
             battle_to_features(battle_state)
         )
 
-        ranking = list(await super().async_select_top_actions(battle_state))
+        # This policy determines which states we visit.
+        generation_ranking = list(
+            await super().async_select_top_actions(battle_state)
+        )
 
-        if not ranking:
+        if not generation_ranking:
             raise RuntimeError("Semi-random handler returned an empty ranking")
 
-        self.observations.append(observation)
-        self.rankings.append(ranking)
+        # The SimpleHeuristics policy is the training target
+        expert_ranking = list(
+            await self.simple_ch.async_select_top_actions(battle_state)
+        )
 
-        # Important: do not filter, reorder, retry, or choose here.
-        return ranking
+        if not expert_ranking:
+            raise RuntimeError(
+                "SimpleHeuristics handler returned an empty ranking"
+            )
+
+        self.observations.append(observation)
+        self.rankings.append(expert_ranking)
+
+        # Showdown follows the semi-random policy, not the expert policy.
+        return generation_ranking
 
 
 def resolve_ranked_action(

@@ -51,7 +51,7 @@ class Metrics:
         result = {"choice_ce": (self.ce_sum / self.choice_count)}
 
         for name, (correct, total) in self.counts.items():
-            result[f"{name}_agreement"] = correct / total if total else None
+            result[f"{name}_agreement"] = correct / (total or 1)
             result[f"{name}_count"] = total
 
         return result
