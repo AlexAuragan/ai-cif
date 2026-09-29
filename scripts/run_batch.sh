@@ -59,3 +59,16 @@ uv run scripts/train.py \
       gae_lambda="0.95" \
       epochs="6" \
       learning_rate="0.0005"
+
+uv run scripts/train.py \
+    --wandb-name "diamond-2" \
+    --wandb-group diamond \
+    --starting-weights "data/models/diamond/diamond_1_00700.pt" \
+    --starting-iteration 700 \
+    --set-training \
+      iterations=1000 \
+    --set-ppo \
+      entropy_coef="0.02" \
+      gae_lambda="0.95" \
+      epochs="6" \
+      learning_rate="0.0004"

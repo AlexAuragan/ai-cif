@@ -104,11 +104,7 @@ async def collect_shard_async(job: dict) -> tuple[str, int, int]:
             Path(job["path"]),
         )
 
-        return (
-            job["path"],
-            len(job["battle_ids"]),
-            len(shard_labels),
-        )
+        return (job["path"], len(job["battle_ids"]), len(shard_labels))
 
     finally:
         await asyncio.gather(

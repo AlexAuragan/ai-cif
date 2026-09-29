@@ -95,9 +95,7 @@ def generate_battles() -> None:
                     continue
 
                 payload = torch.load(
-                    path,
-                    map_location="cpu",
-                    weights_only=True,
+                    path, map_location="cpu", weights_only=True
                 )
 
                 battle_ids = payload["battle_ids"]
@@ -114,15 +112,13 @@ def generate_battles() -> None:
                 print(f"Recovering completed shard: {name}")
 
                 manifest[split].append(name)
-                manifest["decisions"] = (
-                    int(manifest.get("decisions", 0))
-                    + int(labels.numel())
+                manifest["decisions"] = int(manifest.get("decisions", 0)) + int(
+                    labels.numel()
                 )
 
                 battle_key = f"{split}_battles"
                 manifest[battle_key] = (
-                    int(manifest.get(battle_key, 0))
-                    + actual_battles
+                    int(manifest.get(battle_key, 0)) + actual_battles
                 )
 
     for split in ("train", "validation"):
@@ -130,17 +126,9 @@ def generate_battles() -> None:
 
     save_manifest(manifest)
 
-    # Important: calculate this AFTER recovering orphan shards,
-    # otherwise new jobs could reuse their battle IDs.
-    battle_id = next_battle_id(manifest)
-
-
     battle_id = next_battle_id(manifest)
 
     jobs: list[dict] = []
-
-    new_train_shards: list[str] = []
-    new_validation_shards: list[str] = []
 
     for share_index, random_share in enumerate(SEMI_RANDOM_SHARES):
         share_tag = f"{round(random_share * 100):03d}"
@@ -176,26 +164,20 @@ def generate_battles() -> None:
                         "split": split,
                         "battle_ids": battle_ids,
                         "random_share": random_share,
-                        "seed": (
-                            SEED
-                            + share_index * 100_000
-                            + start
-                        ),
+                        "seed": (SEED + share_index * 100_000 + start),
                     }
                 )
 
     random.Random(SEED).shuffle(jobs)
 
+    total_missing = sum(len(job["battle_ids"]) for job in jobs)
     finished_battles = 0
     new_decisions = 0
 
     context = multiprocessing.get_context("spawn")
 
     with ProcessPoolExecutor(max_workers=WORKERS, mp_context=context) as pool:
-        futures = {
-            pool.submit(collect_shard, job): job
-            for job in jobs
-        }
+        futures = {pool.submit(collect_shard, job): job for job in jobs}
 
         try:
             for future in as_completed(futures):
@@ -213,24 +195,17 @@ def generate_battles() -> None:
                 manifest[split].sort()
 
                 manifest["decisions"] = (
-                    int(manifest.get("decisions", 0))
-                    + state_count
+                    int(manifest.get("decisions", 0)) + state_count
                 )
 
                 battle_key = f"{split}_battles"
 
                 manifest[battle_key] = (
-                    int(manifest.get(battle_key, 0))
-                    + battle_count
+                    int(manifest.get(battle_key, 0)) + battle_count
                 )
 
                 # Commit progress immediately.
                 save_manifest(manifest)
-
-                total_missing = sum(
-                    len(job["battle_ids"])
-                    for job in jobs
-                )
 
                 print(
                     f"Collected "
@@ -247,23 +222,13 @@ def generate_battles() -> None:
             pool.terminate_workers()
             raise
 
-    manifest["train"].extend(new_train_shards)
-
-    manifest["validation"].extend(new_validation_shards)
-
     manifest["train_battles_per_share"] = TRAIN_BATTLES_PER_SHARE
-
     manifest["validation_battles_per_share"] = VALIDATION_BATTLES_PER_SHARE
 
     manifest["train_battles"] = TRAIN_BATTLES
-
     manifest["validation_battles"] = VALIDATION_BATTLES
 
-    manifest["decisions"] = int(manifest.get("decisions", 0)) + new_decisions
-
-    (DATA_DIR / "manifest.json").write_text(
-        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
-    )
+    save_manifest(manifest)
 
     print()
     print("Dataset complete.")
@@ -277,8 +242,8 @@ def generate_battles() -> None:
 
     print(f"Total: {TRAIN_BATTLES + VALIDATION_BATTLES} battles")
 
+
 def save_manifest(manifest: dict) -> None:
     (DATA_DIR / "manifest.json").write_text(
-        json.dumps(manifest, indent=2) + "\n",
-        encoding="utf-8",
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
     )

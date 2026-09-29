@@ -2,7 +2,50 @@ from pathlib import Path
 
 import torch
 
+from ai_cif.model.config import ModelConfig
 from ai_cif.model.model import BattleModel
+from ai_cif.vectorization.tensorizer import (
+    FIELD_NUMERIC_DIM,
+    HISTORY_NUMERIC_DIM,
+    POKEMON_NUMERIC_DIM,
+)
+
+
+def create_model(
+    device: torch.device,
+    model_config: ModelConfig,
+    starting_weights: Path | None = None,
+) -> BattleModel:
+    torch.manual_seed(model_config.seed)
+    model = BattleModel(
+        config=model_config,
+        pokemon_numeric_feature_count=POKEMON_NUMERIC_DIM,
+        field_numeric_feature_count=FIELD_NUMERIC_DIM,
+        tactical_numeric_feature_count=HISTORY_NUMERIC_DIM,
+    )
+
+    if starting_weights is not None:
+        checkpoint = torch.load(
+            starting_weights, map_location=device, weights_only=False
+        )
+
+        if not isinstance(checkpoint, dict):
+            raise TypeError(
+                f"Checkpoint {starting_weights} must contain a dict"
+            )
+
+        model_state = checkpoint.get("model", checkpoint)
+
+        if not isinstance(model_state, dict):
+            raise TypeError(
+                f"Checkpoint {starting_weights} has invalid model state"
+            )
+
+        model.load_state_dict(model_state)
+        print(f"Loaded starting weights from {starting_weights}")
+
+    model.to(device)
+    return model
 
 
 def snapshot_model(model: BattleModel) -> dict[str, torch.Tensor]:

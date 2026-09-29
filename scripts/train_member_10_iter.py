@@ -36,7 +36,6 @@ from showdown_sdk.exceptions import (
     BattleReproductionError,
     SDKTimeoutError,
 )
-from showdown_sdk.models.sdk import SampleTeamGenerator
 from showdown_sdk.models.sdk.team_generators.team_generator import (
     BaseTeamGenerator,
 )
@@ -45,6 +44,7 @@ import wandb
 from ai_cif.inference.combat_handler import AsyncNeuralCombatHandler
 from ai_cif.model.config import ModelConfig
 from ai_cif.model.model import BattleModel
+from ai_cif.training.combat_handler import AsyncTrainingCombatHandler
 from ai_cif.training.configs import RunningConfig, TrainingConfig
 from ai_cif.training.ppo import PPOConfig, ppo_update
 from ai_cif.training.rewards import RewardConfig, breakdown_for
@@ -56,31 +56,29 @@ from ai_cif.training.trajectory import (
 )
 from ai_cif.vectorization.tensorizer import (
     CANT_REASON_VOCAB_SIZE,
-    FIELD_NUMERIC_DIM,
     HISTORY_KIND_VOCAB_SIZE,
-    HISTORY_NUMERIC_DIM,
     HISTORY_REF_VOCAB_SIZE,
-    POKEMON_NUMERIC_DIM,
     STATUS_VOCAB_SIZE,
     WEATHER_VOCAB_SIZE,
     BattleTensorizer,
     BattleTensors,
 )
-from scripts.train_simple_heuristics import AsyncTrainingCombatHandler
-from scripts.utils.battles import outcome_for, run_battle
+from scripts.utils.battles import outcome_for, run_battle, team_generators
 from scripts.utils.config import (
     MODEL_TYPES,
     PPO_TYPES,
     REWARD_TYPES,
     RUNNING_TYPES,
     TRAINING_TYPES,
+    apply_overrides,
 )
 from scripts.utils.gpu import (
     GpuInferenceStats,
     SharedBattleBuffer,
     WorkerInferenceStats,
+    print_gpu_inference_stats,
 )
-from scripts.utils.model import save_checkpoint
+from scripts.utils.model import create_model, save_checkpoint
 from scripts.utils.multithreading import split_battles, worker_initializer
 
 type AsyncInferenceFn = Callable[
@@ -247,43 +245,6 @@ def load_historical_opponents(
         )
 
     return models
-
-
-def create_model(
-    device: torch.device,
-    model_config: ModelConfig,
-    starting_weights: Path | None = None,
-) -> BattleModel:
-    torch.manual_seed(model_config.seed)
-    model = BattleModel(
-        config=model_config,
-        pokemon_numeric_feature_count=POKEMON_NUMERIC_DIM,
-        field_numeric_feature_count=FIELD_NUMERIC_DIM,
-        tactical_numeric_feature_count=HISTORY_NUMERIC_DIM,
-    )
-
-    if starting_weights is not None:
-        checkpoint = torch.load(
-            starting_weights, map_location=device, weights_only=False
-        )
-
-        if not isinstance(checkpoint, dict):
-            raise TypeError(
-                f"Checkpoint {starting_weights} must contain a dict"
-            )
-
-        model_state = checkpoint.get("model", checkpoint)
-
-        if not isinstance(model_state, dict):
-            raise TypeError(
-                f"Checkpoint {starting_weights} has invalid model state"
-            )
-
-        model.load_state_dict(model_state)
-        print(f"Loaded starting weights from {starting_weights}")
-
-    model.to(device)
-    return model
 
 
 @dataclass(frozen=True)
@@ -885,30 +846,6 @@ def make_opponent_schedule(
     return schedule
 
 
-def print_gpu_inference_stats(label: str, stats: GpuInferenceStats) -> None:
-    print(
-        f"{label} "
-        f"requests={stats.requests} "
-        f"batches={stats.batches} "
-        f"mean_batch={stats.mean_batch_size:.2f} "
-        f"max_batch={stats.max_batch_size} "
-        f"batch_wait={stats.total_batch_wait_seconds:.3f}s "
-        f"gather={stats.total_gather_seconds:.3f}s "
-        f"gpu_roundtrip={stats.total_inference_seconds:.3f}s "
-        f"dispatch={stats.total_dispatch_seconds:.3f}s"
-    )
-
-
-def _team_generators(
-    *, fmt: str, team_seed: int, phase_id: int, slot_index: int
-) -> tuple[SampleTeamGenerator | None, SampleTeamGenerator | None]:
-    if "randombattle" in fmt:
-        return None, None
-
-    seed = team_seed + phase_id * 100_000 + slot_index * 2
-    return SampleTeamGenerator(seed), SampleTeamGenerator(seed + 1)
-
-
 def _opponent_handler(
     *,
     choice: OpponentChoice,
@@ -1138,7 +1075,7 @@ async def _rollout_lane(
     neural_client.log_manager.disable()
     opponent_client.log_manager.disable()
 
-    team_generator_1, team_generator_2 = _team_generators(
+    team_generator_1, team_generator_2 = team_generators(
         fmt=fmt, team_seed=team_seed, phase_id=phase_id, slot_index=slot_index
     )
 
@@ -1327,7 +1264,7 @@ async def _evaluation_lane(
     neural_client.log_manager.disable()
     opponent_client.log_manager.disable()
 
-    team_generator_1, team_generator_2 = _team_generators(
+    team_generator_1, team_generator_2 = team_generators(
         fmt=fmt, team_seed=team_seed, phase_id=phase_id, slot_index=slot_index
     )
 
@@ -2405,30 +2342,6 @@ async def train_member(
 
         if wandb_run is not None:
             wandb_run.finish()
-
-
-def apply_overrides(
-    config, overrides: list[str], types: dict[str, type]
-) -> None:
-    for over in overrides:
-        key, value = over.split("=", 1)
-
-        if key not in types:
-            raise ValueError(f"Unknown config field: {key}")
-
-        value_type = types[key]
-
-        if value_type is bool:
-            if value.lower() in {"true", "1", "yes"}:
-                parsed_value = True
-            elif value.lower() in {"false", "0", "no"}:
-                parsed_value = False
-            else:
-                raise ValueError(f"Invalid boolean value: {value}")
-        else:
-            parsed_value = value_type(value)
-
-        setattr(config, key, parsed_value)
 
 
 def parse_args() -> argparse.Namespace:

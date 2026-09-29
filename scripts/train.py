@@ -20,7 +20,6 @@ from showdown_sdk.exceptions import (
     BattleReproductionError,
     SDKTimeoutError,
 )
-from showdown_sdk.models.sdk import SampleTeamGenerator
 from showdown_sdk.models.sdk.team_generators.team_generator import (
     BaseTeamGenerator,
 )
@@ -29,7 +28,10 @@ import wandb
 from ai_cif.inference.combat_handler import AsyncNeuralCombatHandler
 from ai_cif.model.config import ModelConfig
 from ai_cif.model.model import BattleModel
-from ai_cif.training.combat_handler import AsyncSemiRandomCombatHandler
+from ai_cif.training.combat_handler import (
+    AsyncSemiRandomCombatHandler,
+    AsyncTrainingCombatHandler,
+)
 from ai_cif.training.configs import PoolConfig, RunningConfig, TrainingConfig
 from ai_cif.training.ppo import PPOConfig, ppo_update
 from ai_cif.training.rewards import RewardConfig, breakdown_for
@@ -41,17 +43,13 @@ from ai_cif.training.trajectory import (
 )
 from ai_cif.vectorization.tensorizer import (
     CANT_REASON_VOCAB_SIZE,
-    FIELD_NUMERIC_DIM,
     HISTORY_KIND_VOCAB_SIZE,
-    HISTORY_NUMERIC_DIM,
     HISTORY_REF_VOCAB_SIZE,
-    POKEMON_NUMERIC_DIM,
     STATUS_VOCAB_SIZE,
     WEATHER_VOCAB_SIZE,
     BattleTensorizer,
 )
-from scripts.train_simple_heuristics import AsyncTrainingCombatHandler
-from scripts.utils.battles import outcome_for, run_battle
+from scripts.utils.battles import outcome_for, run_battle, team_generators
 from scripts.utils.config import (
     MODEL_TYPES,
     POOL_TYPES,
@@ -59,21 +57,22 @@ from scripts.utils.config import (
     REWARD_TYPES,
     RUNNING_TYPES,
     TRAINING_TYPES,
+    apply_overrides,
 )
 from scripts.utils.exceptions import FailureCircuitBreaker, RolloutCircuitOpen
 from scripts.utils.gpu import (
     BatchedGpuInferenceBroker,
-    GpuInferenceStats,
     PendingInference,
     ProcessQueue,
     SharedBattleBuffer,
     WorkerInferenceStats,
     gpu_worker_initializer,
     make_remote_infer,
+    print_gpu_inference_stats,
     response_pump,
     stop_response_pump,
 )
-from scripts.utils.model import load_checkpoint, save_checkpoint
+from scripts.utils.model import create_model, load_checkpoint, save_checkpoint
 from scripts.utils.multithreading import split_battles
 
 load_dotenv()
@@ -114,7 +113,7 @@ TRAINING_CONFIG = TrainingConfig(
 )
 
 POOL_CONFIG = PoolConfig(
-    semi_random_share=0.7, win_rate_threshold=0.75, random_share_increment=0.05
+    semi_random_share=0, win_rate_threshold=0.75, random_share_increment=0.05
 )
 
 RUNNING_CONFIG = RunningConfig(
@@ -227,34 +226,6 @@ def stop_rollout_runtime(
     for response_queue in runtime.response_queues:
         response_queue.close()
         response_queue.join_thread()
-
-
-def create_model(
-    device: torch.device, model_config: ModelConfig
-) -> BattleModel:
-    torch.manual_seed(model_config.seed)
-    model = BattleModel(
-        config=model_config,
-        pokemon_numeric_feature_count=POKEMON_NUMERIC_DIM,
-        field_numeric_feature_count=FIELD_NUMERIC_DIM,
-        tactical_numeric_feature_count=HISTORY_NUMERIC_DIM,
-    )
-    model.to(device)
-    return model
-
-
-def print_gpu_inference_stats(label: str, stats: GpuInferenceStats) -> None:
-    print(
-        f"{label} "
-        f"requests={stats.requests} "
-        f"batches={stats.batches} "
-        f"mean_batch={stats.mean_batch_size:.2f} "
-        f"max_batch={stats.max_batch_size} "
-        f"batch_wait={stats.total_batch_wait_seconds:.3f}s "
-        f"gather={stats.total_gather_seconds:.3f}s "
-        f"gpu_roundtrip={stats.total_inference_seconds:.3f}s "
-        f"dispatch={stats.total_dispatch_seconds:.3f}s"
-    )
 
 
 async def collect_trajectories(
@@ -375,16 +346,6 @@ async def evaluate(
     return wins, losses, ties
 
 
-def _team_generators(
-    *, fmt: str, team_seed: int, phase_id: int, slot_index: int
-) -> tuple[SampleTeamGenerator | None, SampleTeamGenerator | None]:
-    if "randombattle" in fmt:
-        return None, None
-
-    seed = team_seed + phase_id * 100_000 + slot_index * 2
-    return SampleTeamGenerator(seed), SampleTeamGenerator(seed + 1)
-
-
 async def _rollout_lane(
     *,
     url: str,
@@ -423,7 +384,7 @@ async def _rollout_lane(
     neural_client.log_manager.disable()
     random_client.log_manager.disable()
 
-    team_generator_1, team_generator_2 = _team_generators(
+    team_generator_1, team_generator_2 = team_generators(
         fmt=fmt, team_seed=team_seed, phase_id=phase_id, slot_index=slot_index
     )
 
@@ -605,7 +566,7 @@ async def _evaluation_lane(
     neural_client.log_manager.disable()
     random_client.log_manager.disable()
 
-    team_generator_1, team_generator_2 = _team_generators(
+    team_generator_1, team_generator_2 = team_generators(
         fmt=fmt, team_seed=team_seed, phase_id=phase_id, slot_index=slot_index
     )
 
@@ -1383,30 +1344,6 @@ async def train(
 
         if wandb_run is not None:
             wandb_run.finish()
-
-
-def apply_overrides(
-    config, overrides: list[str], types: dict[str, type]
-) -> None:
-    for over in overrides:
-        key, value = over.split("=", 1)
-
-        if key not in types:
-            raise ValueError(f"Unknown config field: {key}")
-
-        value_type = types[key]
-
-        if value_type is bool:
-            if value.lower() in {"true", "1", "yes"}:
-                parsed_value = True
-            elif value.lower() in {"false", "0", "no"}:
-                parsed_value = False
-            else:
-                raise ValueError(f"Invalid boolean value: {value}")
-        else:
-            parsed_value = value_type(value)
-
-        setattr(config, key, parsed_value)
 
 
 def parse_args() -> argparse.Namespace:

@@ -2,7 +2,11 @@ import asyncio
 
 from showdown_sdk.classes.client import Client
 from showdown_sdk.classes.dt import BattleResult
-from showdown_sdk.models.sdk import TeamSet, print_reproduction_teams
+from showdown_sdk.models.sdk import (
+    SampleTeamGenerator,
+    TeamSet,
+    print_reproduction_teams,
+)
 from showdown_sdk.models.sdk.team_generators.team_generator import (
     BaseTeamGenerator,
 )
@@ -120,3 +124,13 @@ async def run_battle(
             print("============================\n")
 
         raise
+
+
+def team_generators(
+    *, fmt: str, team_seed: int, phase_id: int, slot_index: int
+) -> tuple[SampleTeamGenerator | None, SampleTeamGenerator | None]:
+    if "randombattle" in fmt:
+        return None, None
+
+    seed = team_seed + phase_id * 100_000 + slot_index * 2
+    return SampleTeamGenerator(seed), SampleTeamGenerator(seed + 1)

@@ -707,3 +707,17 @@ class BatchedGpuInferenceBroker:
                     break
                 except queue.Full:
                     continue
+
+
+def print_gpu_inference_stats(label: str, stats: GpuInferenceStats) -> None:
+    print(
+        f"{label} "
+        f"requests={stats.requests} "
+        f"batches={stats.batches} "
+        f"mean_batch={stats.mean_batch_size:.2f} "
+        f"max_batch={stats.max_batch_size} "
+        f"batch_wait={stats.total_batch_wait_seconds:.3f}s "
+        f"gather={stats.total_gather_seconds:.3f}s "
+        f"gpu_roundtrip={stats.total_inference_seconds:.3f}s "
+        f"dispatch={stats.total_dispatch_seconds:.3f}s"
+    )

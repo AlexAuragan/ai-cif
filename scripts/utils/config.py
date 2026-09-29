@@ -107,3 +107,27 @@ DTPO_RUNNING_TYPES = {
     "wandb_entity": str,
     "wandb_name": str,
 }
+
+
+def apply_overrides(
+    config, overrides: list[str], types: dict[str, type]
+) -> None:
+    for over in overrides:
+        key, value = over.split("=", 1)
+
+        if key not in types:
+            raise ValueError(f"Unknown config field: {key}")
+
+        value_type = types[key]
+
+        if value_type is bool:
+            if value.lower() in {"true", "1", "yes"}:
+                parsed_value = True
+            elif value.lower() in {"false", "0", "no"}:
+                parsed_value = False
+            else:
+                raise ValueError(f"Invalid boolean value: {value}")
+        else:
+            parsed_value = value_type(value)
+
+        setattr(config, key, parsed_value)

@@ -22,7 +22,6 @@ from showdown_sdk.exceptions import (
     BattleReproductionError,
     SDKTimeoutError,
 )
-from showdown_sdk.models.sdk import SampleTeamGenerator
 
 import wandb
 from ai_cif.dtpo.config import DTPOConfig
@@ -40,8 +39,13 @@ from ai_cif.training.trajectory import (
     summarize_trajectories,
 )
 from ai_cif.vectorization.tensorizer import BattleTensorizer
-from scripts.utils.battles import outcome_for, run_battle
-from scripts.utils.config import REWARD_TYPES, RUNNING_TYPES, TRAINING_TYPES
+from scripts.utils.battles import outcome_for, run_battle, team_generators
+from scripts.utils.config import (
+    REWARD_TYPES,
+    RUNNING_TYPES,
+    TRAINING_TYPES,
+    apply_overrides,
+)
 from scripts.utils.multithreading import split_battles, worker_initializer
 
 load_dotenv()
@@ -111,40 +115,6 @@ RUNNING_CONFIG = RunningConfig(
 TENSORIZER = BattleTensorizer(max_history=32, vocab_gen=4)
 
 
-def apply_overrides(
-    config, overrides: list[str], types: dict[str, type]
-) -> None:
-    for override in overrides:
-        key, value = override.split("=", 1)
-
-        if key not in types:
-            raise ValueError(f"Unknown config field: {key}")
-
-        value_type = types[key]
-
-        if value_type is bool:
-            if value.lower() in {"true", "1", "yes"}:
-                parsed_value = True
-            elif value.lower() in {"false", "0", "no"}:
-                parsed_value = False
-            else:
-                raise ValueError(f"Invalid boolean value: {value}")
-        else:
-            parsed_value = value_type(value)
-
-        setattr(config, key, parsed_value)
-
-
-def _team_generators(
-    *, fmt: str, team_seed: int, phase_id: int, slot_index: int
-) -> tuple[SampleTeamGenerator | None, SampleTeamGenerator | None]:
-    if "randombattle" in fmt:
-        return None, None
-
-    seed = team_seed + phase_id * 100_000 + slot_index * 2
-    return SampleTeamGenerator(seed), SampleTeamGenerator(seed + 1)
-
-
 def _copy_policy(
     policy: DecisionTreePolicy, *, seed: int
 ) -> DecisionTreePolicy:
@@ -203,7 +173,7 @@ async def _collect_lane(
     training_client.log_manager.disable()
     opponent_client.log_manager.disable()
 
-    team_generator_1, team_generator_2 = _team_generators(
+    team_generator_1, team_generator_2 = team_generators(
         fmt=fmt, team_seed=team_seed, phase_id=phase_id, slot_index=slot_index
     )
 
@@ -497,7 +467,7 @@ async def _evaluation_lane(
     evaluation_client.log_manager.disable()
     heuristic_client.log_manager.disable()
 
-    team_generator_1, team_generator_2 = _team_generators(
+    team_generator_1, team_generator_2 = team_generators(
         fmt=fmt, team_seed=team_seed, phase_id=phase_id, slot_index=slot_index
     )
 
@@ -812,9 +782,9 @@ async def train(
             for iteration in range(1, training_config.iterations + 1):
                 phase_id += 1
 
-                timestamp = datetime.now(
-                    tz=ZoneInfo("Europe/Paris")
-                ).strftime("%c")
+                timestamp = datetime.now(tz=ZoneInfo("Europe/Paris")).strftime(
+                    "%c"
+                )
                 print()
                 print(timestamp)
                 print(
