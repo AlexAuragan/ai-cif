@@ -116,12 +116,9 @@ def _rollout_old_values(
 
             indices = torch.arange(start, end, dtype=torch.long)
 
-            public_batch = rollout.observations.index_select(indices).to(device)
-            oracle_batch = rollout.oracle_observations.index_select(indices).to(
-                device
-            )
+            oracle_batch = rollout.oracle_observations.index_select(indices).to(device)
 
-            _, batch_values = model(public_batch, oracle_batch=oracle_batch)
+            batch_values = model._privileged_value(oracle_batch)
 
             values.append(batch_values.cpu())
 

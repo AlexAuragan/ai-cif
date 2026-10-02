@@ -6,7 +6,7 @@ from showdown_sdk.classes.combat_handler.base_handler import (
     AsyncBaseCombatHandler,
     BaseCombatHandler,
 )
-from showdown_sdk.features import battle_to_features
+from showdown_sdk.features import BattleFeatures, battle_to_features
 from showdown_sdk.models.sdk import BattleState
 
 from ai_cif.model.model import BattleModel
@@ -138,7 +138,7 @@ class AsyncNeuralCombatHandler(AsyncBaseCombatHandler):
 
     async def _infer(
         self, battle_state: BattleState
-    ) -> tuple[BattleTensors, torch.Tensor, float]:
+    ) -> tuple[BattleFeatures, BattleTensors, torch.Tensor, float]:
         features = battle_to_features(battle_state)
         tensors = self.tensorizer.tensorize(features)
 
@@ -149,13 +149,13 @@ class AsyncNeuralCombatHandler(AsyncBaseCombatHandler):
                 f"Expected logits shape (10,), got {tuple(logits.shape)}"
             )
 
-        return tensors, logits, value
+        return features, tensors, logits, value
 
     @override
     async def async_select_top_actions(
         self, battle_state: BattleState
     ) -> list[Action]:
-        tensors, logits, _ = await self._infer(battle_state)
+        _, tensors, logits, _ = await self._infer(battle_state)
 
         legal_indices = torch.where(tensors.action_mask)[0]
 

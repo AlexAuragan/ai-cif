@@ -70,7 +70,12 @@ class TrainingCombatHandler(NeuralCombatHandler):
 
         if battle_state.custom_showdown_battlestate is not None:
             oracle_features = oracle_battle_to_features(battle_state, public=features)
-            oracle_tensors = self.tensorizer.tensorize(oracle_features)
+            oracle_tensors = (
+                self.tensorizer.tensorize_oracle_from_public(
+                    oracle_features,
+                    tensors,
+                )
+            )
 
         # Only move the temporary inference batch to the model device.
         batch = tensors.batched().to(self.device)
@@ -202,7 +207,12 @@ class AsyncTrainingCombatHandler(AsyncNeuralCombatHandler):
                 battle_state,
                 public=features,
             )
-            oracle_tensors = self.tensorizer.tensorize(oracle_features)
+            oracle_tensors = (
+                self.tensorizer.tensorize_oracle_from_public(
+                    oracle_features,
+                    tensors,
+                )
+            )
 
         legal_indices = torch.where(tensors.action_mask)[0]
 

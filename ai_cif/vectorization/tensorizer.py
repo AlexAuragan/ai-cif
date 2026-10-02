@@ -653,7 +653,8 @@ class BattleTensorizer:
         self, features: BattleFeatures
     ) -> tuple[Tensor, Tensor, Tensor]:
         move_types = torch.zeros(
-            (POKEMON_SLOTS, MOVES_PER_POKEMON, TYPE_COUNT), dtype=torch.float32
+            (POKEMON_SLOTS, MOVES_PER_POKEMON, TYPE_COUNT),
+            dtype=torch.float32,
         )
 
         move_categories = torch.zeros(
@@ -666,40 +667,82 @@ class BattleTensorizer:
             dtype=torch.float32,
         )
 
+        def fill(
+            row: int,
+            move_slot: int,
+            mechanics,
+        ) -> None:
+            if mechanics is None:
+                return
+
+            if mechanics.move_type is not None:
+                type_index = TYPE_INDEX.get(mechanics.move_type)
+                if type_index is not None:
+                    move_types[row, move_slot, type_index] = 1.0
+
+            if mechanics.category is not None:
+                category_index = MOVE_CATEGORY_INDEX.get(
+                    mechanics.category
+                )
+                if category_index is not None:
+                    move_categories[
+                        row, move_slot, category_index
+                    ] = 1.0
+
+            if mechanics.base_power is not None:
+                move_numeric[row, move_slot, 0] = _clamp_float(
+                    mechanics.base_power / 200.0,
+                    0.0,
+                    1.0,
+                )
+
+            if mechanics.accuracy is not None:
+                move_numeric[row, move_slot, 1] = _clamp_float(
+                    mechanics.accuracy / 100.0,
+                    0.0,
+                    1.0,
+                )
+
+            move_numeric[row, move_slot, 2] = float(
+                mechanics.always_hits
+            )
+
+            move_numeric[row, move_slot, 3] = _clamp_float(
+                mechanics.priority / 7.0,
+                -1.0,
+                1.0,
+            )
+
+        # Own moves are always represented directly.
         for row, pokemon in enumerate(features.own_team):
             if not pokemon.present:
                 continue
 
-            for move_slot, move in enumerate(pokemon.moves[:MOVES_PER_POKEMON]):
-                mechanics = move.mechanics
-
-                if mechanics is None:
+            for move_slot, move in enumerate(
+                pokemon.moves[:MOVES_PER_POKEMON]
+            ):
+                if not move.present:
                     continue
 
-                if mechanics.move_type is not None:
-                    type_index = TYPE_INDEX.get(mechanics.move_type)
-                    if type_index is not None:
-                        move_types[row, move_slot, type_index] = 1.0
+                fill(row, move_slot, move.mechanics)
 
-                if mechanics.category is not None:
-                    category_index = MOVE_CATEGORY_INDEX.get(mechanics.category)
-                    if category_index is not None:
-                        move_categories[row, move_slot, category_index] = 1.0
+        # Enemy move mechanics follow the same knowledge semantics as move IDs.
+        for enemy_index, pokemon in enumerate(features.enemy_team):
+            if not pokemon.revealed:
+                continue
 
-                if mechanics.base_power is not None:
-                    move_numeric[row, move_slot, 0] = _clamp_float(
-                        mechanics.base_power / 200.0, 0.0, 1.0
-                    )
+            row = TEAM_SIZE + enemy_index
 
-                if mechanics.accuracy is not None:
-                    move_numeric[row, move_slot, 1] = _clamp_float(
-                        mechanics.accuracy / 100.0, 0.0, 1.0
-                    )
+            for move_slot, mechanics_knowledge in enumerate(
+                pokemon.move_mechanics[:MOVES_PER_POKEMON]
+            ):
+                if not mechanics_knowledge.known:
+                    continue
 
-                move_numeric[row, move_slot, 2] = float(mechanics.always_hits)
-
-                move_numeric[row, move_slot, 3] = _clamp_float(
-                    mechanics.priority / 7.0, -1.0, 1.0
+                fill(
+                    row,
+                    move_slot,
+                    mechanics_knowledge.value,
                 )
 
         return move_types, move_categories, move_numeric
@@ -789,6 +832,94 @@ class BattleTensorizer:
 
         if device is not None:
             return output.to(device)
+
+        return output
+
+    def tensorize_oracle_from_public(
+        self,
+        features: BattleFeatures,
+        public: BattleTensors,
+    ) -> BattleTensors:
+        """Tensorize privileged features while reusing public-only tensors.
+
+        Oracle features differ only in opponent-team information and potentially
+        enemy_active_slot. History, weather and action legality are unchanged.
+        """
+
+        gen = features.format.gen
+
+        if gen is None:
+            raise ValueError("BattleFeatures.format.gen must be known")
+
+        if gen > self.vocab_gen:
+            raise ValueError(
+                f"Battle generation {gen} exceeds vocabulary generation "
+                f"{self.vocab_gen}; increase vocab_gen before training on it"
+            )
+
+        if len(features.own_team) != TEAM_SIZE:
+            raise ValueError(
+                f"Expected {TEAM_SIZE} own Pokémon slots, got "
+                f"{len(features.own_team)}"
+            )
+
+        if len(features.enemy_team) != TEAM_SIZE:
+            raise ValueError(
+                f"Expected {TEAM_SIZE} enemy Pokémon slots, got "
+                f"{len(features.enemy_team)}"
+            )
+
+        categorical = self._tensorize_pokemon_categoricals(features)
+
+        pokemon_numeric, pokemon_mask = (
+            self._tensorize_pokemon_numeric(features)
+        )
+
+        pokemon_types, pokemon_base_stats = (
+            self._tensorize_pokemon_mechanics(features)
+        )
+
+        move_types, move_categories, move_numeric = (
+            self._tensorize_move_mechanics(features)
+        )
+
+        # Oracle enemy_active_slot can differ from public knowledge.
+        field_numeric = self._tensorize_field(features)
+
+        output = BattleTensors(
+            base_species_ids=categorical["base_species_ids"],
+            species_ids=categorical["species_ids"],
+            form_ids=categorical["form_ids"],
+            pokemon_types=pokemon_types,
+            pokemon_base_stats=pokemon_base_stats,
+            move_ids=categorical["move_ids"],
+            move_types=move_types,
+            move_categories=move_categories,
+            move_numeric=move_numeric,
+            item_ids=categorical["item_ids"],
+            ability_ids=categorical["ability_ids"],
+            status_ids=categorical["status_ids"],
+            pokemon_numeric=pokemon_numeric,
+            pokemon_mask=pokemon_mask,
+
+            weather_id=public.weather_id,
+            field_numeric=field_numeric,
+
+            history_kind=public.history_kind,
+            history_move=public.history_move,
+            history_species=public.history_species,
+            history_form=public.history_form,
+            history_actor=public.history_actor,
+            history_target=public.history_target,
+            history_reason=public.history_reason,
+            history_numeric=public.history_numeric,
+            history_mask=public.history_mask,
+            history_length=public.history_length,
+
+            action_mask=public.action_mask,
+        )
+
+        self._validate_shapes(output)
 
         return output
 

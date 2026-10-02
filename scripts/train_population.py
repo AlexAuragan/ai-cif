@@ -110,7 +110,7 @@ PPO_CONFIG = PPOConfig(
     entropy_coef=0.01,
     max_grad_norm=0.5,
     epochs=6,
-    minibatch_size=512,
+    minibatch_size=1024,
     kl_target=0.02,
     kl_ratio_threshold=2,
     gamma=1,
@@ -124,7 +124,7 @@ TRAINING_CONFIG = TrainingConfig(
     # Kept because TrainingConfig requires it. Population evaluation below uses
     # EVAL_BATTLES_PER_OPPONENT instead of a single total battle count.
     eval_battles=1000,
-    eval_interval=20,
+    eval_interval=100,
     team_seed=42,
 )
 
@@ -163,7 +163,7 @@ MODEL_CONFIG = ModelConfig(
 # round freezes the population at step 10*k and trains every member from
 # 10*k -> 10*(k+1) against that frozen population. This keeps opponent strength
 # fair even though members are trained sequentially on one desktop GPU.
-POPULATION_SIZE = 10
+POPULATION_SIZE = 5
 STEPS_PER_ROUND = 10
 
 # Change this one path to your supervised-learning checkpoint.
