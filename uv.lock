@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.14"
 resolution-markers = [
     "extra != 'extra-6-ai-cif-cpu' and extra == 'extra-6-ai-cif-rocm'",
@@ -1169,7 +1169,7 @@ wheels = [
 [[package]]
 name = "showdown-sdk"
 version = "0.2.4"
-source = { git = "https://forgejo.auragan.fr/AlexAuragan/Showdown-SDK.git#b76d510897e99759619f5cbf7f73dc477efc2154" }
+source = { git = "https://forgejo.auragan.fr/AlexAuragan/Showdown-SDK.git#7c301aa1a97497b747a213bb3b942885fd936e45" }
 dependencies = [
     { name = "aiohttp" },
     { name = "requests" },

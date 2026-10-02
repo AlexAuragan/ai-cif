@@ -29,7 +29,7 @@ from scripts.utils.model import create_model
 ORACLE_ENV = "SHOWDOWN_USE_REQUEST_STATE"
 OPPONENT_MODEL_KEY = "critic_warmup_opponent"
 
-DEFAULT_INPUT = Path("data/models/platinium/platinium_00300.pt")
+DEFAULT_INPUT = Path("data/models/platinium/platinium_00300_privileged_critic.pt")
 DEFAULT_OUTPUT = Path(
     "data/models/platinium/platinium_00300_privileged_critic.pt"
 )

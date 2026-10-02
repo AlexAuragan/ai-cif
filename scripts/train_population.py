@@ -1271,9 +1271,9 @@ async def _rollout_lane(
 
     handler = AsyncTrainingCombatHandler(tensorizer=tensorizer, infer=infer)
 
-    neural_client = Client(url, combat_handler=handler)
+    neural_client = Client(url, combat_handler=handler, request_state=True)
     opponent_client = Client(
-        url, combat_handler=SimpleHeuristicsCombatHandler()
+        url, combat_handler=None, request_state=False
     )
 
     neural_client.log_manager.disable()

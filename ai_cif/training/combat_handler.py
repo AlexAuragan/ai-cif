@@ -69,7 +69,7 @@ class TrainingCombatHandler(NeuralCombatHandler):
         oracle_tensors = None
 
         if battle_state.custom_showdown_battlestate is not None:
-            oracle_features = oracle_battle_to_features(battle_state)
+            oracle_features = oracle_battle_to_features(battle_state, public=features)
             oracle_tensors = self.tensorizer.tensorize(oracle_features)
 
         # Only move the temporary inference batch to the model device.
@@ -193,12 +193,15 @@ class AsyncTrainingCombatHandler(AsyncNeuralCombatHandler):
     async def async_select_top_actions(
         self, battle_state: BattleState
     ) -> list[Action]:
-        tensors, logits, value = await self._infer(battle_state)
+        features, tensors, logits, value = await self._infer(battle_state)
 
         oracle_tensors = None
 
         if battle_state.custom_showdown_battlestate is not None:
-            oracle_features = oracle_battle_to_features(battle_state)
+            oracle_features = oracle_battle_to_features(
+                battle_state,
+                public=features,
+            )
             oracle_tensors = self.tensorizer.tensorize(oracle_features)
 
         legal_indices = torch.where(tensors.action_mask)[0]
