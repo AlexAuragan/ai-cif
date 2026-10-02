@@ -7,7 +7,8 @@ from showdown_sdk.classes.combat_handler import (
     AsyncRandomMoveCombatHandler,
     AsyncSimpleHeuristicsCombatHandler,
 )
-from showdown_sdk.features import battle_to_features, oracle_battle_to_features
+from showdown_sdk.features import battle_to_features
+from showdown_sdk.features.oracle import oracle_battle_to_features
 from showdown_sdk.models.sdk import BattleState
 
 from ai_cif.inference.combat_handler import (

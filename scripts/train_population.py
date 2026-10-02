@@ -132,13 +132,13 @@ TRAINING_CONFIG = TrainingConfig(
 RUNNING_CONFIG = RunningConfig(
     url=DEFAULT_WEBSOCKET_URL,
     format="gen4randombattle",
-    workers=20,
+    workers=18,
     threads=2,
     checkpoint_dir=Path("checkpoints"),
     wandb_project="ai-cif",
     wandb_entity=None,
     battle_lanes=10,
-    gpu_batch_size=256,
+    gpu_batch_size=128,
     gpu_batch_wait_ms=2,
 )
 
@@ -2513,6 +2513,7 @@ def _training_log_data(
         f"{prefix}/early_stop": int(metrics.early_stop),
         f"{prefix}/mean_value": metrics.mean_value,
         f"{prefix}/mean_return": metrics.mean_return,
+        f"{prefix}/explained_variance": metrics.explained_variance,
         "gpu_inference/requests": rollout_inference_stats.requests,
         "gpu_inference/batches": rollout_inference_stats.batches,
         "gpu_inference/mean_batch_size": (
@@ -2566,6 +2567,7 @@ async def train_member_block(
     tensorizer: BattleTensorizer,
     population_prefix: str,
 ) -> None:
+    os.environ["SHOWDOWN_USE_REQUEST_STATE"] = "1"
     device = torch.device("cuda")
     checkpoint_dir = member_checkpoint_dir(
         running_config=running_config,
@@ -2793,6 +2795,7 @@ async def train_member_recovery_updates(
     tensorizer: BattleTensorizer,
     population_prefix: str,
 ) -> None:
+    os.environ["SHOWDOWN_USE_REQUEST_STATE"] = "1"
     device = torch.device("cuda")
     checkpoint_dir = member_checkpoint_dir(
         running_config=running_config,
@@ -3038,6 +3041,7 @@ async def evaluate_member_at_step(
     population_prefix: str,
     log_prefix: str,
 ) -> dict:
+    os.environ["SHOWDOWN_USE_REQUEST_STATE"] = "0"
     device = torch.device("cuda")
     checkpoint_dir = member_checkpoint_dir(
         running_config=running_config,

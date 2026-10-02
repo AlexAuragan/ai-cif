@@ -1169,7 +1169,7 @@ wheels = [
 [[package]]
 name = "showdown-sdk"
 version = "0.2.4"
-source = { git = "https://forgejo.auragan.fr/AlexAuragan/Showdown-SDK.git#77e8dd099447894ad8dde081d995492950330036" }
+source = { git = "https://forgejo.auragan.fr/AlexAuragan/Showdown-SDK.git#b76d510897e99759619f5cbf7f73dc477efc2154" }
 dependencies = [
     { name = "aiohttp" },
     { name = "requests" },

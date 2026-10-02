@@ -1,4 +1,5 @@
 import asyncio
+import traceback
 
 from showdown_sdk.classes.client import Client
 from showdown_sdk.classes.dt import BattleResult
@@ -93,6 +94,7 @@ async def run_battle(
         return result_1, result_2
 
     except BaseException as error:
+        traceback.print_exception(error)
         waiters = [
             waiter
             for waiter in (battle_waiter_1, battle_waiter_2)
