@@ -190,12 +190,18 @@ def ppo_update(
 
             batch = rollout.observations.index_select(indices).to(device)
 
+            oracle_batch = (
+                rollout.oracle_observations.index_select(indices).to(device)
+                if rollout.oracle_observations is not None
+                else None
+            )
+
             batch_actions = actions[indices]
             batch_old_log_probs = old_log_probs[indices]
             batch_returns = returns[indices]
             batch_advantages = advantages[indices]
 
-            logits, values = model(batch)
+            logits, values = model(batch, oracle_batch=oracle_batch)
 
             distribution = Categorical(logits=logits)
 

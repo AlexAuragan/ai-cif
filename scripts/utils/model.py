@@ -118,16 +118,21 @@ def load_checkpoint(
     if not isinstance(model_state, dict):
         raise TypeError(f"Checkpoint {path} has invalid model state")
 
-    model.load_state_dict(model_state)
+    legacy_checkpoint = _load_model_state(model, model_state)
 
     optimizer_state = checkpoint.get("optimizer")
 
-    if optimizer_state is not None:
+    if optimizer_state is not None and not legacy_checkpoint:
         if not isinstance(optimizer_state, dict):
             raise TypeError(f"Checkpoint {path} has invalid optimizer state")
 
         optimizer.load_state_dict(optimizer_state)
 
+    elif optimizer_state is not None and legacy_checkpoint:
+        print(
+            "Skipping legacy optimizer state because the model "
+            "now contains privileged critic parameters"
+        )
     iteration = checkpoint.get("iteration", 0)
 
     if isinstance(iteration, bool) or not isinstance(iteration, int):
