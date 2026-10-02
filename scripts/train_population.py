@@ -2401,6 +2401,7 @@ def evaluation_phase_id(*, population_step: int, member_index: int) -> int:
     _ = member_index
     return 50_000_000 + population_step
 
+
 def _training_group_log_data(
     *,
     prefix: str,
@@ -2420,10 +2421,7 @@ def _training_group_log_data(
     groups: dict[str, dict[str, float | int]] = {}
 
     for choice, outcome, reward in zip(
-        opponent_choices,
-        outcomes,
-        rewards,
-        strict=True,
+        opponent_choices, outcomes, rewards, strict=True
     ):
         if choice.group not in groups:
             groups[choice.group] = {
@@ -2466,6 +2464,7 @@ def _training_group_log_data(
 
     return log_data
 
+
 def _training_log_data(
     *,
     member_index: int,
@@ -2491,7 +2490,6 @@ def _training_log_data(
         "population/model_index": member_index,
         "population/ppo_updates_total": progress.ppo_updates_total,
         "population/recovery_updates_total": progress.recovery_updates_total,
-
         f"{prefix}/battles": battle_count,
         f"{prefix}/decisions": decisions,
         f"{prefix}/wins": wins,
@@ -2500,12 +2498,10 @@ def _training_log_data(
         f"{prefix}/win_rate": wins / battle_count,
         f"{prefix}/mean_reward": mean_reward,
         f"{prefix}/mean_decisions_per_battle": decisions / battle_count,
-
         f"{prefix}/rollout_seconds": rollout_seconds,
         f"{prefix}/rollout_battles_per_second": (
             battle_count / rollout_seconds
         ),
-
         f"{prefix}/ppo_seconds": ppo_seconds,
         f"{prefix}/policy_loss": metrics.policy_loss,
         f"{prefix}/value_loss": metrics.value_loss,
@@ -2517,7 +2513,6 @@ def _training_log_data(
         f"{prefix}/early_stop": int(metrics.early_stop),
         f"{prefix}/mean_value": metrics.mean_value,
         f"{prefix}/mean_return": metrics.mean_return,
-
         "gpu_inference/requests": rollout_inference_stats.requests,
         "gpu_inference/batches": rollout_inference_stats.batches,
         "gpu_inference/mean_batch_size": (
@@ -2529,26 +2524,20 @@ def _training_log_data(
         "gpu_inference/seconds": (
             rollout_inference_stats.total_inference_seconds
         ),
-
         "reward/total": (
-            sum(item.total for item in reward_breakdowns)
-            / battle_count
+            sum(item.total for item in reward_breakdowns) / battle_count
         ),
         "reward/outcome": (
-            sum(item.outcome for item in reward_breakdowns)
-            / battle_count
+            sum(item.outcome for item in reward_breakdowns) / battle_count
         ),
         "reward/own_hp": (
-            sum(item.own_hp for item in reward_breakdowns)
-            / battle_count
+            sum(item.own_hp for item in reward_breakdowns) / battle_count
         ),
         "reward/enemy_damage": (
-            sum(item.enemy_damage for item in reward_breakdowns)
-            / battle_count
+            sum(item.enemy_damage for item in reward_breakdowns) / battle_count
         ),
         "reward/speed": (
-            sum(item.speed for item in reward_breakdowns)
-            / battle_count
+            sum(item.speed for item in reward_breakdowns) / battle_count
         ),
     }
 

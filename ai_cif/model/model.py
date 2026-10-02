@@ -1,3 +1,4 @@
+from copy import deepcopy
 from typing import Literal
 
 import torch
@@ -66,7 +67,15 @@ class BattleModel(nn.Module):
             nn.Linear(config.trunk_output_dim, 1), nn.Tanh()
         )
 
-    def forward(self, batch: BattleBatch) -> tuple[Tensor, Tensor]:
+        self.critic_pokemon_encoder = deepcopy(self.pokemon_encoder)
+        self.critic_field_encoder = deepcopy(self.field_encoder)
+        self.critic_history_encoder = deepcopy(self.history_encoder)
+        self.critic_trunk = deepcopy(self.trunk)
+        self.critic_value_head = deepcopy(self.value_head)
+
+    def forward(
+        self, batch: BattleBatch, oracle_batch: BattleBatch | None = None
+    ) -> tuple[Tensor, Tensor]:
         pokemon = self.pokemon_encoder(
             base_species=batch.base_species_ids,
             species=batch.species_ids,
@@ -111,9 +120,68 @@ class BattleModel(nn.Module):
             ~batch.action_mask.bool(), torch.finfo(logits.dtype).min
         )
 
-        value = self.value_head(hidden).squeeze(-1)
+        if oracle_batch is None:
+            value = self.value_head(hidden).squeeze(-1)
+        else:
+            value = self._privileged_value(oracle_batch)
 
         return logits, value
+
+    def reset_privileged_critic_from_public(self) -> None:
+        """Initialize the privileged critic from the current public value network."""
+
+        self.critic_pokemon_encoder.load_state_dict(
+            self.pokemon_encoder.state_dict()
+        )
+        self.critic_field_encoder.load_state_dict(
+            self.field_encoder.state_dict()
+        )
+        self.critic_history_encoder.load_state_dict(
+            self.history_encoder.state_dict()
+        )
+        self.critic_trunk.load_state_dict(self.trunk.state_dict())
+        self.critic_value_head.load_state_dict(self.value_head.state_dict())
+
+    def _privileged_value(self, batch: BattleBatch) -> Tensor:
+        pokemon = self.critic_pokemon_encoder(
+            base_species=batch.base_species_ids,
+            species=batch.species_ids,
+            form=batch.form_ids,
+            pokemon_types=batch.pokemon_types,
+            pokemon_base_stats=batch.pokemon_base_stats,
+            moves=batch.move_ids,
+            move_types=batch.move_types,
+            move_categories=batch.move_categories,
+            move_numeric=batch.move_numeric,
+            item=batch.item_ids,
+            ability=batch.ability_ids,
+            status=batch.status_ids,
+            numeric=batch.pokemon_numeric,
+        )
+
+        pokemon = pokemon.flatten(start_dim=1)
+
+        field = self.critic_field_encoder(
+            weather=batch.weather_id, numeric=batch.field_numeric
+        )
+
+        history = self.critic_history_encoder(
+            kind=batch.history_kind,
+            move=batch.history_move,
+            species=batch.history_species,
+            form=batch.history_form,
+            actor=batch.history_actor,
+            target=batch.history_target,
+            reason=batch.history_reason,
+            numeric=batch.history_numeric,
+            length=batch.history_length,
+        )
+
+        state = torch.cat((pokemon, field, history), dim=-1)
+
+        hidden = self.critic_trunk(state)
+
+        return self.critic_value_head(hidden).squeeze(-1)
 
 
 class TransformerBattleModel(nn.Module):
@@ -173,7 +241,25 @@ class TransformerBattleModel(nn.Module):
 
         nn.init.normal_(self.state_token, mean=0.0, std=0.02)
 
-    def forward(self, batch: BattleBatch) -> tuple[Tensor, Tensor]:
+        self.critic_pokemon_encoder = deepcopy(self.pokemon_encoder)
+        self.critic_field_encoder = deepcopy(self.field_encoder)
+        self.critic_history_encoder = deepcopy(self.history_encoder)
+
+        self.critic_pokemon_projection = deepcopy(self.pokemon_projection)
+        self.critic_field_projection = deepcopy(self.field_projection)
+        self.critic_history_projection = deepcopy(self.history_projection)
+
+        self.critic_state_token = nn.Parameter(
+            self.state_token.detach().clone()
+        )
+
+        self.critic_transformer = deepcopy(self.transformer)
+        self.critic_output_norm = deepcopy(self.output_norm)
+        self.critic_value_head = deepcopy(self.value_head)
+
+    def forward(
+        self, batch: BattleBatch, oracle_batch: BattleBatch | None = None
+    ) -> tuple[Tensor, Tensor]:
         pokemon = self.pokemon_encoder(
             base_species=batch.base_species_ids,
             species=batch.species_ids,
@@ -246,9 +332,91 @@ class TransformerBattleModel(nn.Module):
             ~batch.action_mask.bool(), torch.finfo(logits.dtype).min
         )
 
-        value = self.value_head(hidden).squeeze(-1)
+        if oracle_batch is None:
+            value = self.value_head(hidden).squeeze(-1)
+        else:
+            value = self._privileged_value(oracle_batch)
 
         return logits, value
+
+    def reset_privileged_critic_from_public(self) -> None:
+        self.critic_pokemon_encoder.load_state_dict(
+            self.pokemon_encoder.state_dict()
+        )
+        self.critic_field_encoder.load_state_dict(
+            self.field_encoder.state_dict()
+        )
+        self.critic_history_encoder.load_state_dict(
+            self.history_encoder.state_dict()
+        )
+
+        self.critic_pokemon_projection.load_state_dict(
+            self.pokemon_projection.state_dict()
+        )
+        self.critic_field_projection.load_state_dict(
+            self.field_projection.state_dict()
+        )
+        self.critic_history_projection.load_state_dict(
+            self.history_projection.state_dict()
+        )
+
+        with torch.no_grad():
+            self.critic_state_token.copy_(self.state_token)
+
+        self.critic_transformer.load_state_dict(self.transformer.state_dict())
+        self.critic_output_norm.load_state_dict(self.output_norm.state_dict())
+        self.critic_value_head.load_state_dict(self.value_head.state_dict())
+
+    def _privileged_value(self, batch: BattleBatch) -> Tensor:
+        pokemon = self.critic_pokemon_encoder(
+            base_species=batch.base_species_ids,
+            species=batch.species_ids,
+            form=batch.form_ids,
+            pokemon_types=batch.pokemon_types,
+            pokemon_base_stats=batch.pokemon_base_stats,
+            moves=batch.move_ids,
+            move_types=batch.move_types,
+            move_categories=batch.move_categories,
+            move_numeric=batch.move_numeric,
+            item=batch.item_ids,
+            ability=batch.ability_ids,
+            status=batch.status_ids,
+            numeric=batch.pokemon_numeric,
+        )
+
+        pokemon_tokens = self.critic_pokemon_projection(pokemon)
+
+        field = self.critic_field_encoder(
+            weather=batch.weather_id, numeric=batch.field_numeric
+        )
+        field_token = self.critic_field_projection(field).unsqueeze(1)
+
+        history = self.critic_history_encoder(
+            kind=batch.history_kind,
+            move=batch.history_move,
+            species=batch.history_species,
+            form=batch.history_form,
+            actor=batch.history_actor,
+            target=batch.history_target,
+            reason=batch.history_reason,
+            numeric=batch.history_numeric,
+            length=batch.history_length,
+        )
+        history_token = self.critic_history_projection(history).unsqueeze(1)
+
+        batch_size = pokemon.shape[0]
+
+        state_token = self.critic_state_token.expand(batch_size, -1, -1)
+
+        tokens = torch.cat(
+            (state_token, pokemon_tokens, field_token, history_token), dim=1
+        )
+
+        encoded = self.critic_transformer(tokens)
+
+        hidden = self.critic_output_norm(encoded[:, 0])
+
+        return self.critic_value_head(hidden).squeeze(-1)
 
 
 def create_battle_model(

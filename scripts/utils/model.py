@@ -33,6 +33,8 @@ def create_model(
             field_numeric_feature_count=FIELD_NUMERIC_DIM,
             tactical_numeric_feature_count=HISTORY_NUMERIC_DIM,
         )
+    else:
+        raise ValueError()
 
     if starting_weights is not None:
         checkpoint = torch.load(
@@ -51,7 +53,14 @@ def create_model(
                 f"Checkpoint {starting_weights} has invalid model state"
             )
 
-        model.load_state_dict(model_state)
+        legacy_checkpoint = _load_model_state(model, model_state)
+
+        if legacy_checkpoint:
+            print(
+                "Loaded legacy actor weights and initialized "
+                "privileged critic from public critic"
+            )
+
         print(f"Loaded starting weights from {starting_weights}")
 
     model.to(device)
@@ -127,3 +136,46 @@ def load_checkpoint(
         )
 
     return iteration
+
+
+def _load_model_state(
+    model: BattleModel | TransformerBattleModel,
+    model_state: dict[str, torch.Tensor],
+) -> bool:
+    """Load model weights.
+
+    Returns True when loading a legacy checkpoint that predates the
+    privileged critic.
+    """
+
+    has_privileged_critic = any(
+        name.startswith("critic_") for name in model_state
+    )
+
+    if has_privileged_critic:
+        model.load_state_dict(model_state)
+        return False
+
+    result = model.load_state_dict(model_state, strict=False)
+
+    unexpected = set(result.unexpected_keys)
+    missing = set(result.missing_keys)
+
+    expected_missing = {
+        name for name in model.state_dict() if name.startswith("critic_")
+    }
+
+    if unexpected:
+        raise RuntimeError(
+            f"Legacy checkpoint has unexpected model keys: {sorted(unexpected)}"
+        )
+
+    if missing != expected_missing:
+        raise RuntimeError(
+            "Legacy checkpoint is missing unexpected model keys: "
+            f"{sorted(missing - expected_missing)}"
+        )
+
+    model.reset_privileged_critic_from_public()
+
+    return True

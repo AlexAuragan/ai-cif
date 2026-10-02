@@ -954,6 +954,15 @@ class BattleTensorizer:
                 must_recharge=pokemon.status.must_recharge,
             )
 
+            if pokemon.stats is not None:
+                stats = pokemon.stats
+                numeric[row, 19] = _normalize_stat(stats.attack)
+                numeric[row, 20] = _normalize_stat(stats.defense)
+                numeric[row, 21] = _normalize_stat(stats.special_attack)
+                numeric[row, 22] = _normalize_stat(stats.special_defense)
+                numeric[row, 23] = _normalize_stat(stats.speed)
+                numeric[row, 24] = 1.0
+
         return numeric, mask
 
     @staticmethod

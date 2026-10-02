@@ -47,10 +47,13 @@ class PPOMetrics:
 
 
 def compute_gae(
-    rollout: PackedRollout, gamma: float, gae_lambda: float
+    rollout: PackedRollout,
+    old_values: torch.Tensor,
+    gamma: float,
+    gae_lambda: float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    advantages = torch.empty_like(rollout.old_values)
-    returns = torch.empty_like(rollout.old_values)
+    advantages = torch.empty_like(old_values)
+    returns = torch.empty_like(old_values)
 
     offset = 0
 
@@ -60,7 +63,7 @@ def compute_gae(
         trajectory_length = int(trajectory_length_tensor.item())
         end = offset + trajectory_length
 
-        values = rollout.old_values[offset:end]
+        values = old_values[offset:end]
         terminal_reward = rollout.rewards[trajectory_index]
 
         next_value = torch.tensor(0.0, dtype=values.dtype, device=values.device)
@@ -94,6 +97,37 @@ def compute_gae(
     return advantages, returns
 
 
+def _rollout_old_values(
+    model: BattleModel | TransformerBattleModel,
+    rollout: PackedRollout,
+    device: torch.device,
+    minibatch_size: int,
+) -> torch.Tensor:
+    if rollout.oracle_observations is None:
+        return rollout.old_values
+
+    values: list[torch.Tensor] = []
+
+    model.eval()
+
+    with torch.inference_mode():
+        for start in range(0, rollout.decision_count, minibatch_size):
+            end = min(start + minibatch_size, rollout.decision_count)
+
+            indices = torch.arange(start, end, dtype=torch.long)
+
+            public_batch = rollout.observations.index_select(indices).to(device)
+            oracle_batch = rollout.oracle_observations.index_select(indices).to(
+                device
+            )
+
+            _, batch_values = model(public_batch, oracle_batch=oracle_batch)
+
+            values.append(batch_values.cpu())
+
+    return torch.cat(values, dim=0)
+
+
 def ppo_update(
     *,
     model: BattleModel | TransformerBattleModel,
@@ -111,8 +145,18 @@ def ppo_update(
     if rollout.decision_count == 0:
         raise ValueError("No decisions to train on")
 
+    old_values_cpu = _rollout_old_values(
+        model=model,
+        rollout=rollout,
+        device=device,
+        minibatch_size=config.minibatch_size,
+    )
+
     advantages_cpu, returns_cpu = compute_gae(
-        rollout, gamma=config.gamma, gae_lambda=config.gae_lambda
+        rollout,
+        old_values=old_values_cpu,
+        gamma=config.gamma,
+        gae_lambda=config.gae_lambda,
     )
 
     if advantages_cpu.numel() > 1:
@@ -122,7 +166,7 @@ def ppo_update(
 
     actions = rollout.actions.to(device)
     old_log_probs = rollout.old_log_probs.to(device)
-    old_values = rollout.old_values.to(device)
+    old_values = old_values_cpu.to(device)
     returns = returns_cpu.to(device)
     advantages = advantages_cpu.to(device)
 

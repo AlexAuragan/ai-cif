@@ -7,7 +7,7 @@ from showdown_sdk.classes.combat_handler import (
     AsyncRandomMoveCombatHandler,
     AsyncSimpleHeuristicsCombatHandler,
 )
-from showdown_sdk.features import battle_to_features
+from showdown_sdk.features import battle_to_features, oracle_battle_to_features
 from showdown_sdk.models.sdk import BattleState
 
 from ai_cif.inference.combat_handler import (
@@ -65,6 +65,12 @@ class TrainingCombatHandler(NeuralCombatHandler):
         # Keep the stored observation on CPU.
         tensors = self.tensorizer.tensorize(features)
 
+        oracle_tensors = None
+
+        if battle_state.custom_showdown_battlestate is not None:
+            oracle_features = oracle_battle_to_features(battle_state)
+            oracle_tensors = self.tensorizer.tensorize(oracle_features)
+
         # Only move the temporary inference batch to the model device.
         batch = tensors.batched().to(self.device)
 
@@ -105,6 +111,7 @@ class TrainingCombatHandler(NeuralCombatHandler):
                 action=action_index,
                 log_prob=float(log_prob.item()),
                 value=float(value[0].item()),
+                oracle_observation=oracle_tensors,
             )
         )
 
@@ -187,6 +194,12 @@ class AsyncTrainingCombatHandler(AsyncNeuralCombatHandler):
     ) -> list[Action]:
         tensors, logits, value = await self._infer(battle_state)
 
+        oracle_tensors = None
+
+        if battle_state.custom_showdown_battlestate is not None:
+            oracle_features = oracle_battle_to_features(battle_state)
+            oracle_tensors = self.tensorizer.tensorize(oracle_features)
+
         legal_indices = torch.where(tensors.action_mask)[0]
 
         if legal_indices.numel() == 0:
@@ -208,6 +221,7 @@ class AsyncTrainingCombatHandler(AsyncNeuralCombatHandler):
                 action=action_index,
                 log_prob=float(log_prob.item()),
                 value=value,
+                oracle_observation=oracle_tensors,
             )
         )
 

@@ -17,6 +17,7 @@ class Decision:
     action: int
     log_prob: float
     value: float
+    oracle_observation: BattleTensors | None = None
 
 
 @dataclass
@@ -47,8 +48,18 @@ class PackedRollout:
 
     reward_breakdowns: tuple[RewardBreakdown, ...]
 
+    oracle_observations: BattleBatch | None = None
+
     def __post_init__(self) -> None:
         decision_count = self.observations.batch_size
+
+        if (
+            self.oracle_observations is not None
+            and self.oracle_observations.batch_size != decision_count
+        ):
+            raise ValueError(
+                "oracle_observations decision count does not match observations"
+            )
 
         decision_tensors = {
             "actions": self.actions,
@@ -165,6 +176,27 @@ class PackedRollout:
 
         rewards_tensor = torch.tensor(rewards, dtype=torch.float32)
 
+        oracle_items = [decision.oracle_observation for decision in decisions]
+
+        has_oracle = [observation is not None for observation in oracle_items]
+
+        if any(has_oracle) and not all(has_oracle):
+            raise ValueError(
+                "Rollout mixes decisions with and without oracle observations"
+            )
+
+        oracle_observations = (
+            collate_battles(
+                [
+                    observation
+                    for observation in oracle_items
+                    if observation is not None
+                ]
+            )
+            if all(has_oracle)
+            else None
+        )
+
         return cls(
             observations=observations,
             actions=actions,
@@ -174,12 +206,32 @@ class PackedRollout:
             outcomes=outcomes_tensor,
             rewards=rewards_tensor,
             reward_breakdowns=tuple(reward_breakdowns),
+            oracle_observations=oracle_observations,
         )
 
     @classmethod
     def concat(cls, chunks: list[PackedRollout]) -> PackedRollout:
         if not chunks:
             raise ValueError("Cannot concatenate an empty rollout list")
+
+        has_oracle = [chunk.oracle_observations is not None for chunk in chunks]
+
+        if any(has_oracle) and not all(has_oracle):
+            raise ValueError(
+                "Cannot concatenate rollouts with mixed oracle availability"
+            )
+
+        oracle_observations = (
+            BattleBatch.cat(
+                [
+                    chunk.oracle_observations
+                    for chunk in chunks
+                    if chunk.oracle_observations is not None
+                ]
+            )
+            if all(has_oracle)
+            else None
+        )
 
         return cls(
             observations=BattleBatch.cat(
@@ -200,6 +252,7 @@ class PackedRollout:
                 for chunk in chunks
                 for breakdown in chunk.reward_breakdowns
             ),
+            oracle_observations=oracle_observations,
         )
 
 
