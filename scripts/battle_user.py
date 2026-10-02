@@ -1,19 +1,26 @@
 import asyncio
+import os
 from pathlib import Path
 
 import torch
+from showdown_sdk import LogManager, create_battle_file_handler
 from showdown_sdk.classes.client import Client
+from showdown_sdk.classes.combat_handler.simple_heuristics_handler import (
+    SimpleHeuristicsCombatHandler,
+)
 from showdown_sdk.exceptions import UserNotFoundError
 
 from ai_cif.inference.combat_handler import NeuralCombatHandler
 from scripts.train import MODEL_CONFIG, TENSORIZER
 from scripts.utils.model import create_model
 
-WEBSOCKET_URL = "ws://127.0.0.1:8000/showdown/websocket"
-
+DEFAULT_WEBSOCKET_URL = (
+    os.environ.get("DEFAULT_WEBSOCKET_URL")
+    or "ws://127.0.0.1:8000/showdown/websocket"
+)
 BOT_NAME = "AI-cif"
 TARGET_NAME = "AlexAuragan"
-FORMAT = "gen1randombattle"
+FORMAT = "gen4randombattle"
 
 CHECKPOINT_PATH = Path("data/models/gen1randombattle/red-hp-1-150-best.pt")
 
@@ -36,9 +43,19 @@ def load_bot() -> NeuralCombatHandler:
 
 
 async def main() -> None:
-    handler = load_bot()
+    # handler = load_bot()
+    handler = SimpleHeuristicsCombatHandler()
+    logs = LogManager()
+    logs.add_handler(
+        create_battle_file_handler(
+            Path("logs"), filename="manual_battle_raw.txt"
+        ),
+        loggers="protocol",
+    )
 
-    client = Client(WEBSOCKET_URL, combat_handler=handler)
+    client = Client(
+        DEFAULT_WEBSOCKET_URL, combat_handler=handler, log_manager=logs
+    )
 
     try:
         await client.connect()

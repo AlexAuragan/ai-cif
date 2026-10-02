@@ -21,7 +21,7 @@ from ai_cif.rl import generate_battles, train_model
 
 def main() -> None:
     generate_battles()
-    train_model()
+    train_model("transformer")
 
 
 if __name__ == "__main__":

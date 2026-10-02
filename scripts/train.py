@@ -27,7 +27,7 @@ from showdown_sdk.models.sdk.team_generators.team_generator import (
 import wandb
 from ai_cif.inference.combat_handler import AsyncNeuralCombatHandler
 from ai_cif.model.config import ModelConfig
-from ai_cif.model.model import BattleModel
+from ai_cif.model.model import BattleModel, TransformerBattleModel
 from ai_cif.training.combat_handler import (
     AsyncSemiRandomCombatHandler,
     AsyncTrainingCombatHandler,
@@ -91,21 +91,21 @@ REWARD_CONFIG = RewardConfig(
 )
 
 PPO_CONFIG = PPOConfig(
-    learning_rate=3e-4,
+    learning_rate=1e-4,
     clip_epsilon=0.2,
     value_coef=0.5,
-    entropy_coef=0.04,
+    entropy_coef=0.01,
     max_grad_norm=0.5,
-    epochs=4,
-    minibatch_size=256,
+    epochs=6,
+    minibatch_size=512,
     kl_target=0.02,
     kl_ratio_threshold=2,
     gamma=1,
-    gae_lambda=0.95,
+    gae_lambda=0.98,
 )
 
 TRAINING_CONFIG = TrainingConfig(
-    iterations=100,
+    iterations=1700,
     rollout_battles=1000,
     eval_battles=1000,
     eval_interval=10,
@@ -113,20 +113,20 @@ TRAINING_CONFIG = TrainingConfig(
 )
 
 POOL_CONFIG = PoolConfig(
-    semi_random_share=0, win_rate_threshold=0.75, random_share_increment=0.05
+    semi_random_share=0, win_rate_threshold=0.7, random_share_increment=0.05
 )
 
 RUNNING_CONFIG = RunningConfig(
     url=DEFAULT_WEBSOCKET_URL,
     format="gen4randombattle",
-    workers=25,
+    workers=20,
     threads=2,
     checkpoint_dir=Path("checkpoints"),
     wandb_project="ai-cif",
     wandb_entity=None,
     battle_lanes=10,
     gpu_batch_size=32,
-    gpu_batch_wait_ms=0.5,
+    gpu_batch_wait_ms=2,
 )
 
 TENSORIZER = BattleTensorizer(max_history=32, vocab_gen=4)
@@ -157,7 +157,7 @@ class RolloutRuntime:
 def create_rollout_runtime(
     *,
     context,
-    model: BattleModel,
+    model: BattleModel | TransformerBattleModel,
     device: torch.device,
     running_config: RunningConfig,
     tensorizer: BattleTensorizer,
@@ -830,7 +830,7 @@ async def train(
         f"GPU inference batch wait: {running_config.gpu_batch_wait_ms:.3f} ms"
     )
 
-    model = create_model(device, model_config)
+    model = create_model(device, model_config, "transfomer")
     model.eval()
 
     parameter_count = sum(parameter.numel() for parameter in model.parameters())

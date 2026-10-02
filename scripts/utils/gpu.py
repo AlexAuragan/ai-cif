@@ -8,7 +8,7 @@ from time import perf_counter
 
 import torch
 
-from ai_cif.model.model import BattleModel
+from ai_cif.model.model import BattleModel, TransformerBattleModel
 from ai_cif.vectorization.tensorizer import (
     ACTION_COUNT,
     BASE_STATS_DIM,
@@ -470,7 +470,7 @@ class BatchedGpuInferenceBroker:
     def __init__(
         self,
         *,
-        model: BattleModel,
+        model: BattleModel | TransformerBattleModel,
         device: torch.device,
         request_queue: ProcessQueue,
         response_queues: list[ProcessQueue],

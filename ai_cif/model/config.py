@@ -37,6 +37,12 @@ class ModelConfig:
     tactical_entry_output_dim: int = 64
     history_hidden_dim: int = 128
 
+    transformer_dim: int = 256
+    transformer_heads: int = 8
+    transformer_layers: int = 2
+    transformer_ff_dim: int = 1024
+    transformer_dropout: float = 0.0
+
     trunk_hidden_dim: int = 256
     trunk_output_dim: int = 128
 

@@ -1,9 +1,10 @@
 from pathlib import Path
+from typing import Literal
 
 import torch
 
 from ai_cif.model.config import ModelConfig
-from ai_cif.model.model import BattleModel
+from ai_cif.model.model import BattleModel, TransformerBattleModel
 from ai_cif.vectorization.tensorizer import (
     FIELD_NUMERIC_DIM,
     HISTORY_NUMERIC_DIM,
@@ -14,15 +15,24 @@ from ai_cif.vectorization.tensorizer import (
 def create_model(
     device: torch.device,
     model_config: ModelConfig,
+    model_type: Literal["mlp", "transfomer"],
     starting_weights: Path | None = None,
-) -> BattleModel:
+) -> BattleModel | TransformerBattleModel:
     torch.manual_seed(model_config.seed)
-    model = BattleModel(
-        config=model_config,
-        pokemon_numeric_feature_count=POKEMON_NUMERIC_DIM,
-        field_numeric_feature_count=FIELD_NUMERIC_DIM,
-        tactical_numeric_feature_count=HISTORY_NUMERIC_DIM,
-    )
+    if model_type == "mlp":
+        model = BattleModel(
+            config=model_config,
+            pokemon_numeric_feature_count=POKEMON_NUMERIC_DIM,
+            field_numeric_feature_count=FIELD_NUMERIC_DIM,
+            tactical_numeric_feature_count=HISTORY_NUMERIC_DIM,
+        )
+    elif model_type == "transfomer":
+        model = TransformerBattleModel(
+            config=model_config,
+            pokemon_numeric_feature_count=POKEMON_NUMERIC_DIM,
+            field_numeric_feature_count=FIELD_NUMERIC_DIM,
+            tactical_numeric_feature_count=HISTORY_NUMERIC_DIM,
+        )
 
     if starting_weights is not None:
         checkpoint = torch.load(
@@ -59,7 +69,7 @@ def snapshot_model(model: BattleModel) -> dict[str, torch.Tensor]:
 def save_checkpoint(
     *,
     path: Path,
-    model: BattleModel,
+    model: BattleModel | TransformerBattleModel,
     optimizer: torch.optim.Optimizer,
     iteration: int,
 ) -> None:
@@ -78,7 +88,7 @@ def save_checkpoint(
 def load_checkpoint(
     *,
     path: Path,
-    model: BattleModel,
+    model: BattleModel | TransformerBattleModel,
     optimizer: torch.optim.Optimizer,
     device: torch.device,
 ) -> int:

@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import torch
 from torch.distributions import Categorical
 
-from ai_cif.model.model import BattleModel
+from ai_cif.model.model import BattleModel, TransformerBattleModel
 from ai_cif.training.trajectory import PackedRollout, Trajectory
 
 
@@ -96,7 +96,7 @@ def compute_gae(
 
 def ppo_update(
     *,
-    model: BattleModel,
+    model: BattleModel | TransformerBattleModel,
     optimizer: torch.optim.Optimizer,
     trajectories: list[Trajectory] | PackedRollout,
     config: PPOConfig,

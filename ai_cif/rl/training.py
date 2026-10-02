@@ -5,6 +5,7 @@ import random
 import time
 from dataclasses import asdict
 from pathlib import Path
+from typing import Literal
 
 import torch
 
@@ -163,7 +164,7 @@ def save_best_checkpoint(model, *, epoch: int, validation: dict) -> None:
     )
 
 
-def train_model() -> None:
+def train_model(model_type: Literal["normal", "transformer"]) -> None:
     """Train the BattleModel from the already generated dataset."""
 
     print()
@@ -185,7 +186,10 @@ def train_model() -> None:
     torch.manual_seed(SEED)
 
     model, _ = create_battle_model(
-        device=DEVICE, max_history=MAX_HISTORY, vocab_gen=VOCAB_GEN
+        device=DEVICE,
+        max_history=MAX_HISTORY,
+        vocab_gen=VOCAB_GEN,
+        model_type=model_type,
     )
 
     load_starting_weights(model)

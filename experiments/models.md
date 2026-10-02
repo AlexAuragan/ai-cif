@@ -41,3 +41,21 @@ flowchart LR
 | name | Entry hidden | Entry output | History hidden | Trunk hidden | Trunk output |
 |---|---|---|---|---|---|
 | red | 96 | 64 | 128 | 256 | 128 |
+
+# Transfomer version
+flowchart LR
+    P["12 Pokémon<br/>encoders"] --> PP["Project to<br/>Pokémon tokens"]
+    F["Field<br/>encoder"] --> FP["Project to<br/>field token"]
+    H["History<br/>encoder + GRU"] --> HP["Project to<br/>history token"]
+    S["Learned<br/>[STATE] token"] --> X
+
+    PP --> X["Concatenate tokens<br/>[STATE] + 12 Pokémon + field + history"]
+    FP --> X
+    HP --> X
+
+    X --> TR["Transformer encoder<br/>entity attention"]
+
+    TR --> ST["Final [STATE] token"]
+
+    ST --> PH["Policy Head<br/>128 → 10 actions"]
+    ST --> VH["Value Head<br/>128 → 1"]

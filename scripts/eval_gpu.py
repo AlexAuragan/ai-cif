@@ -21,6 +21,7 @@ import torch
 from dotenv import load_dotenv
 from showdown_sdk.classes.client import Client
 from showdown_sdk.classes.combat_handler import (
+    BetterHeuristicsCombatHandler,
     MaxBasePowerCombatHandler,
     RandomMoveCombatHandler,
     SimpleHeuristicsCombatHandler,
@@ -70,7 +71,12 @@ CSV_COLUMNS = [
     "ties",
 ]
 
-HEURISTIC_NAMES = {"random", "MaxBasePower", "SimpleHeuristics"}
+HEURISTIC_NAMES = {
+    "random",
+    "MaxBasePower",
+    "SimpleHeuristics",
+    # "BetterHeuristics"
+}
 
 
 @dataclass(frozen=True)
@@ -161,6 +167,7 @@ def discover_participants(models_dir: Path) -> list[Participant]:
         ("random", "random"),
         ("MaxBasePower", "MaxBasePower"),
         ("SimpleHeuristics", "SimpleHeuristics"),
+        ("BetterHeuristics", "BetterHeuristics"),
     ]
 
     for checkpoint in checkpoints:
@@ -644,6 +651,8 @@ def create_handler(
             return MaxBasePowerCombatHandler()
         case "SimpleHeuristics":
             return SimpleHeuristicsCombatHandler()
+        case "BetterHeuristics":
+            return BetterHeuristicsCombatHandler()
 
     if not isinstance(checkpoint, Path):
         raise TypeError(
@@ -1273,7 +1282,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--url", default=DEFAULT_WEBSOCKET_URL)
-    parser.add_argument("--format", dest="fmt", default="gen1randombattle")
+    parser.add_argument("--format", dest="fmt", default="gen4randombattle")
     parser.add_argument(
         "--battles",
         type=int,

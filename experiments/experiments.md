@@ -65,3 +65,9 @@ Multithreading was really usefull when everything was on CPU with many cores, bu
 
 ## Batching
 On GPU, we can compute the tensors for multiple observations at the same time, instead of applying one trajectory at the time, we can apply a batch of 32/64
+
+# RL target 
+
+# GAE
+
+# Transformers
