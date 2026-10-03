@@ -5,6 +5,7 @@ import torch
 from showdown_sdk.features import (
     BattleFeatures,
     Knowledge,
+    MoveMechanicsFeatures,
     PokemonRefFeatures,
     SideConditionFeatures,
 )
@@ -613,6 +614,72 @@ class BattleTensorizer:
         self.move_vocab_size = limits.move + 2
         self.ability_vocab_size = limits.ability + 2
         self.item_vocab_size = limits.item + 2
+        self._move_mechanics_cache: dict[
+            MoveMechanicsFeatures,
+            tuple[Tensor, Tensor, Tensor],
+        ] = {}
+
+    def _cached_move_mechanics(
+        self,
+        mechanics: MoveMechanicsFeatures,
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        cached = self._move_mechanics_cache.get(mechanics)
+
+        if cached is not None:
+            return cached
+
+        move_type = torch.zeros(TYPE_COUNT, dtype=torch.float32)
+        move_category = torch.zeros(
+            MOVE_CATEGORY_COUNT, dtype=torch.float32
+        )
+        move_numeric = torch.zeros(
+            MOVE_NUMERIC_DIM, dtype=torch.float32
+        )
+
+        if mechanics.move_type is not None:
+            type_index = TYPE_INDEX.get(mechanics.move_type)
+
+            if type_index is not None:
+                move_type[type_index] = 1.0
+
+        if mechanics.category is not None:
+            category_index = MOVE_CATEGORY_INDEX.get(
+                mechanics.category
+            )
+
+            if category_index is not None:
+                move_category[category_index] = 1.0
+
+        if mechanics.base_power is not None:
+            move_numeric[0] = _clamp_float(
+                mechanics.base_power / 200.0,
+                0.0,
+                1.0,
+            )
+
+        if mechanics.accuracy is not None:
+            move_numeric[1] = _clamp_float(
+                mechanics.accuracy / 100.0,
+                0.0,
+                1.0,
+            )
+
+        move_numeric[2] = float(mechanics.always_hits)
+        move_numeric[3] = _clamp_float(
+            mechanics.priority / 7.0,
+            -1.0,
+            1.0,
+        )
+
+        cached = (
+            move_type,
+            move_category,
+            move_numeric,
+        )
+
+        self._move_mechanics_cache[mechanics] = cached
+
+        return cached
 
     def _tensorize_pokemon_mechanics(
         self, features: BattleFeatures
@@ -670,48 +737,18 @@ class BattleTensorizer:
         def fill(
             row: int,
             move_slot: int,
-            mechanics,
+            mechanics: MoveMechanicsFeatures | None,
         ) -> None:
             if mechanics is None:
                 return
 
-            if mechanics.move_type is not None:
-                type_index = TYPE_INDEX.get(mechanics.move_type)
-                if type_index is not None:
-                    move_types[row, move_slot, type_index] = 1.0
-
-            if mechanics.category is not None:
-                category_index = MOVE_CATEGORY_INDEX.get(
-                    mechanics.category
-                )
-                if category_index is not None:
-                    move_categories[
-                        row, move_slot, category_index
-                    ] = 1.0
-
-            if mechanics.base_power is not None:
-                move_numeric[row, move_slot, 0] = _clamp_float(
-                    mechanics.base_power / 200.0,
-                    0.0,
-                    1.0,
+            cached_type, cached_category, cached_numeric = (
+                    self._cached_move_mechanics(mechanics)
                 )
 
-            if mechanics.accuracy is not None:
-                move_numeric[row, move_slot, 1] = _clamp_float(
-                    mechanics.accuracy / 100.0,
-                    0.0,
-                    1.0,
-                )
-
-            move_numeric[row, move_slot, 2] = float(
-                mechanics.always_hits
-            )
-
-            move_numeric[row, move_slot, 3] = _clamp_float(
-                mechanics.priority / 7.0,
-                -1.0,
-                1.0,
-            )
+            move_types[row, move_slot].copy_(cached_type)
+            move_categories[row, move_slot].copy_(cached_category)
+            move_numeric[row, move_slot].copy_(cached_numeric)
 
         # Own moves are always represented directly.
         for row, pokemon in enumerate(features.own_team):
@@ -835,16 +872,196 @@ class BattleTensorizer:
 
         return output
 
+    def _tensorize_enemy_categoricals(
+        self, features: BattleFeatures
+    ) -> dict[str, Tensor]:
+        base_species_ids = torch.zeros(TEAM_SIZE, dtype=torch.long)
+        species_ids = torch.zeros(TEAM_SIZE, dtype=torch.long)
+        form_ids = torch.zeros(TEAM_SIZE, dtype=torch.long)
+        move_ids = torch.zeros(
+            (TEAM_SIZE, MOVES_PER_POKEMON), dtype=torch.long
+        )
+        item_ids = torch.zeros(TEAM_SIZE, dtype=torch.long)
+        ability_ids = torch.zeros(TEAM_SIZE, dtype=torch.long)
+        status_ids = torch.zeros(TEAM_SIZE, dtype=torch.long)
+
+        for row, pokemon in enumerate(features.enemy_team):
+            if not pokemon.revealed:
+                base_species_ids[row] = UNKNOWN_ID
+                species_ids[row] = UNKNOWN_ID
+                form_ids[row] = UNKNOWN_ID
+                move_ids[row].fill_(UNKNOWN_ID)
+
+                item_ids[row] = self._enemy_item_token(
+                    pokemon.item, gen=features.format.gen
+                )
+                ability_ids[row] = self._enemy_ability_token(
+                    pokemon.current_ability,
+                    gen=features.format.gen,
+                )
+                status_ids[row] = NONE_ID
+                continue
+
+            base_species, _ = self._species_token(pokemon.species)
+            current_species, current_form = self._species_token(
+                pokemon.current_species or pokemon.species
+            )
+
+            base_species_ids[row] = base_species
+            species_ids[row] = current_species
+            form_ids[row] = current_form
+
+            for move_slot, move in enumerate(
+                pokemon.moves[:MOVES_PER_POKEMON]
+            ):
+                move_ids[row, move_slot] = self._knowledge_move_token(move)
+
+            item_ids[row] = self._enemy_item_token(
+                pokemon.item, gen=features.format.gen
+            )
+            ability_ids[row] = self._enemy_ability_token(
+                pokemon.current_ability,
+                gen=features.format.gen,
+            )
+            status_ids[row] = self._status_token(pokemon.status.major)
+
+        return {
+            "base_species_ids": base_species_ids,
+            "species_ids": species_ids,
+            "form_ids": form_ids,
+            "move_ids": move_ids,
+            "item_ids": item_ids,
+            "ability_ids": ability_ids,
+            "status_ids": status_ids,
+        }
+
+    def _tensorize_enemy_numeric(
+        self, features: BattleFeatures
+    ) -> tuple[Tensor, Tensor]:
+        numeric = torch.zeros(
+            (TEAM_SIZE, POKEMON_NUMERIC_DIM), dtype=torch.float32
+        )
+        mask = torch.zeros(TEAM_SIZE, dtype=torch.bool)
+
+        for row, pokemon in enumerate(features.enemy_team):
+            if not pokemon.revealed:
+                continue
+
+            mask[row] = True
+
+            self._fill_common_pokemon_numeric(
+                numeric[row],
+                present=True,
+                active=pokemon.active,
+                fainted=pokemon.fainted,
+                hp_ratio=pokemon.hp_ratio,
+                level=pokemon.level,
+                transformed=pokemon.transformed,
+                has_type_override=pokemon.type_override is not None,
+                attack_stage=pokemon.status.attack_stage,
+                defense_stage=pokemon.status.defense_stage,
+                special_attack_stage=pokemon.status.special_attack_stage,
+                special_defense_stage=pokemon.status.special_defense_stage,
+                speed_stage=pokemon.status.speed_stage,
+                accuracy_stage=pokemon.status.accuracy_stage,
+                evasion_stage=pokemon.status.evasion_stage,
+                perish_count=pokemon.status.perish_count,
+                must_recharge=pokemon.status.must_recharge,
+            )
+
+            if pokemon.stats is not None:
+                stats = pokemon.stats
+                numeric[row, 19] = _normalize_stat(stats.attack)
+                numeric[row, 20] = _normalize_stat(stats.defense)
+                numeric[row, 21] = _normalize_stat(stats.special_attack)
+                numeric[row, 22] = _normalize_stat(stats.special_defense)
+                numeric[row, 23] = _normalize_stat(stats.speed)
+                numeric[row, 24] = 1.0
+
+        return numeric, mask
+
+    def _tensorize_enemy_mechanics(
+        self, features: BattleFeatures
+    ) -> tuple[Tensor, Tensor]:
+        types = torch.zeros(
+            (TEAM_SIZE, TYPE_COUNT), dtype=torch.float32
+        )
+        base_stats = torch.zeros(
+            (TEAM_SIZE, BASE_STATS_DIM), dtype=torch.float32
+        )
+
+        for row, pokemon in enumerate(features.enemy_team):
+            mechanics = pokemon.mechanics
+
+            if mechanics is None:
+                continue
+
+            for type_name in mechanics.types:
+                index = TYPE_INDEX.get(type_name)
+                if index is not None:
+                    types[row, index] = 1.0
+
+            stats = mechanics.base_stats
+
+            if stats is None:
+                continue
+
+            base_stats[row, 0] = _normalize_base_stat(stats.hp)
+            base_stats[row, 1] = _normalize_base_stat(stats.attack)
+            base_stats[row, 2] = _normalize_base_stat(stats.defense)
+            base_stats[row, 3] = _normalize_base_stat(stats.special_attack)
+            base_stats[row, 4] = _normalize_base_stat(stats.special_defense)
+            base_stats[row, 5] = _normalize_base_stat(stats.speed)
+
+        return types, base_stats
+
+    def _tensorize_enemy_move_mechanics(
+        self, features: BattleFeatures
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        move_types = torch.zeros(
+            (TEAM_SIZE, MOVES_PER_POKEMON, TYPE_COUNT),
+            dtype=torch.float32,
+        )
+        move_categories = torch.zeros(
+            (TEAM_SIZE, MOVES_PER_POKEMON, MOVE_CATEGORY_COUNT),
+            dtype=torch.float32,
+        )
+        move_numeric = torch.zeros(
+            (TEAM_SIZE, MOVES_PER_POKEMON, MOVE_NUMERIC_DIM),
+            dtype=torch.float32,
+        )
+
+        for row, pokemon in enumerate(features.enemy_team):
+            if not pokemon.revealed:
+                continue
+
+            for move_slot, mechanics_knowledge in enumerate(
+                pokemon.move_mechanics[:MOVES_PER_POKEMON]
+            ):
+                if not mechanics_knowledge.known:
+                    continue
+
+                mechanics = mechanics_knowledge.value
+
+                if mechanics is None:
+                    continue
+
+                cached_type, cached_category, cached_numeric = (
+                    self._cached_move_mechanics(mechanics)
+                )
+
+                move_types[row, move_slot].copy_(cached_type)
+                move_categories[row, move_slot].copy_(cached_category)
+                move_numeric[row, move_slot].copy_(cached_numeric)
+
+        return move_types, move_categories, move_numeric
+
     def tensorize_oracle_from_public(
         self,
         features: BattleFeatures,
         public: BattleTensors,
     ) -> BattleTensors:
-        """Tensorize privileged features while reusing public-only tensors.
-
-        Oracle features differ only in opponent-team information and potentially
-        enemy_active_slot. History, weather and action legality are unchanged.
-        """
+        """Tensorize privileged enemy information while reusing public tensors."""
 
         gen = features.format.gen
 
@@ -869,36 +1086,65 @@ class BattleTensorizer:
                 f"{len(features.enemy_team)}"
             )
 
-        categorical = self._tensorize_pokemon_categoricals(features)
+        categorical = self._tensorize_enemy_categoricals(features)
+        enemy_numeric, enemy_mask = self._tensorize_enemy_numeric(features)
+        enemy_types, enemy_base_stats = self._tensorize_enemy_mechanics(features)
+        (
+            enemy_move_types,
+            enemy_move_categories,
+            enemy_move_numeric,
+        ) = self._tensorize_enemy_move_mechanics(features)
 
-        pokemon_numeric, pokemon_mask = (
-            self._tensorize_pokemon_numeric(features)
-        )
+        base_species_ids = public.base_species_ids.clone()
+        species_ids = public.species_ids.clone()
+        form_ids = public.form_ids.clone()
+        move_ids = public.move_ids.clone()
+        item_ids = public.item_ids.clone()
+        ability_ids = public.ability_ids.clone()
+        status_ids = public.status_ids.clone()
 
-        pokemon_types, pokemon_base_stats = (
-            self._tensorize_pokemon_mechanics(features)
-        )
+        pokemon_numeric = public.pokemon_numeric.clone()
+        pokemon_mask = public.pokemon_mask.clone()
+        pokemon_types = public.pokemon_types.clone()
+        pokemon_base_stats = public.pokemon_base_stats.clone()
 
-        move_types, move_categories, move_numeric = (
-            self._tensorize_move_mechanics(features)
-        )
+        move_types = public.move_types.clone()
+        move_categories = public.move_categories.clone()
+        move_numeric = public.move_numeric.clone()
+
+        base_species_ids[TEAM_SIZE:] = categorical["base_species_ids"]
+        species_ids[TEAM_SIZE:] = categorical["species_ids"]
+        form_ids[TEAM_SIZE:] = categorical["form_ids"]
+        move_ids[TEAM_SIZE:] = categorical["move_ids"]
+        item_ids[TEAM_SIZE:] = categorical["item_ids"]
+        ability_ids[TEAM_SIZE:] = categorical["ability_ids"]
+        status_ids[TEAM_SIZE:] = categorical["status_ids"]
+
+        pokemon_numeric[TEAM_SIZE:] = enemy_numeric
+        pokemon_mask[TEAM_SIZE:] = enemy_mask
+        pokemon_types[TEAM_SIZE:] = enemy_types
+        pokemon_base_stats[TEAM_SIZE:] = enemy_base_stats
+
+        move_types[TEAM_SIZE:] = enemy_move_types
+        move_categories[TEAM_SIZE:] = enemy_move_categories
+        move_numeric[TEAM_SIZE:] = enemy_move_numeric
 
         # Oracle enemy_active_slot can differ from public knowledge.
         field_numeric = self._tensorize_field(features)
 
         output = BattleTensors(
-            base_species_ids=categorical["base_species_ids"],
-            species_ids=categorical["species_ids"],
-            form_ids=categorical["form_ids"],
+            base_species_ids=base_species_ids,
+            species_ids=species_ids,
+            form_ids=form_ids,
             pokemon_types=pokemon_types,
             pokemon_base_stats=pokemon_base_stats,
-            move_ids=categorical["move_ids"],
+            move_ids=move_ids,
             move_types=move_types,
             move_categories=move_categories,
             move_numeric=move_numeric,
-            item_ids=categorical["item_ids"],
-            ability_ids=categorical["ability_ids"],
-            status_ids=categorical["status_ids"],
+            item_ids=item_ids,
+            ability_ids=ability_ids,
+            status_ids=status_ids,
             pokemon_numeric=pokemon_numeric,
             pokemon_mask=pokemon_mask,
 
@@ -1681,6 +1927,7 @@ def _normalize_stat(value: int | None) -> float:
 
 def _clamp_float(value: float, minimum: float, maximum: float) -> float:
     return max(minimum, min(maximum, float(value)))
+
 
 
 __all__ = [

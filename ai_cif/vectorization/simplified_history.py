@@ -112,6 +112,7 @@ type _InternalEntry = _MoveBuilder | SwitchTacticalEntry | CantTacticalEntry
 
 def build_simplified_history(
     history: tuple[EventFeatures, ...],
+    initial_hp_by_pokemon: dict[tuple[str, int | str], float] | None = None,
 ) -> tuple[SimplifiedHistoryEntry, ...]:
     """Compress full semantic history into tactical history.
 
@@ -134,7 +135,7 @@ def build_simplified_history(
 
     entries: list[_InternalEntry] = []
     moves_by_action_id: dict[int, _MoveBuilder] = {}
-    hp_by_pokemon: dict[tuple[str, int | str], float] = {}
+    hp_by_pokemon = dict(initial_hp_by_pokemon or {})
 
     for event in history:
         event_type = event.event_type

@@ -109,7 +109,7 @@ PPO_CONFIG = PPOConfig(
     value_coef=0.5,
     entropy_coef=0.01,
     max_grad_norm=0.5,
-    epochs=6,
+    epochs=4,
     minibatch_size=1024,
     kl_target=0.02,
     kl_ratio_threshold=2,
@@ -120,7 +120,7 @@ PPO_CONFIG = PPOConfig(
 
 TRAINING_CONFIG = TrainingConfig(
     iterations=1000,
-    rollout_battles=1000,
+    rollout_battles=500,
     # Kept because TrainingConfig requires it. Population evaluation below uses
     # EVAL_BATTLES_PER_OPPONENT instead of a single total battle count.
     eval_battles=1000,
@@ -132,12 +132,12 @@ TRAINING_CONFIG = TrainingConfig(
 RUNNING_CONFIG = RunningConfig(
     url=DEFAULT_WEBSOCKET_URL,
     format="gen4randombattle",
-    workers=18,
-    threads=2,
+    workers=12,
+    threads=1,
     checkpoint_dir=Path("checkpoints"),
     wandb_project="ai-cif",
     wandb_entity=None,
-    battle_lanes=10,
+    battle_lanes=15,
     gpu_batch_size=128,
     gpu_batch_wait_ms=2,
 )
@@ -163,11 +163,11 @@ MODEL_CONFIG = ModelConfig(
 # round freezes the population at step 10*k and trains every member from
 # 10*k -> 10*(k+1) against that frozen population. This keeps opponent strength
 # fair even though members are trained sequentially on one desktop GPU.
-POPULATION_SIZE = 5
+POPULATION_SIZE = 2
 STEPS_PER_ROUND = 10
 
 # Change this one path to your supervised-learning checkpoint.
-SUPERVISED_INITIAL_WEIGHTS = Path("data/models/platinium/platinium_00300.pt")
+SUPERVISED_INITIAL_WEIGHTS = Path("data/models/platinium/platinium_00300_privileged_critic.pt")
 POPULATION_INITIAL_WEIGHTS = {
     index: SUPERVISED_INITIAL_WEIGHTS for index in range(1, POPULATION_SIZE + 1)
 }
@@ -187,9 +187,9 @@ SIMPLE_HEURISTICS_GROUP = "simple_heuristics"
 CURRENT_GROUP = "current"
 TRAINING_MODEL_KEY = "training"
 
-# Only multiples of 100 become eligible historical strategies. The training
+# Only multiples of N become eligible historical strategies. The training
 # historical pool stays bounded: baseline + broad coverage over old snapshots.
-HISTORICAL_SNAPSHOT_INTERVAL = 100
+HISTORICAL_SNAPSHOT_INTERVAL = 20
 HISTORICAL_POOL_SIZE = 10
 
 # Benchmark/evaluation. Each listed opponent gets this many battles. Current
@@ -1460,9 +1460,9 @@ async def _evaluation_lane(
 
     handler = AsyncNeuralCombatHandler(tensorizer=tensorizer, infer=infer)
 
-    neural_client = Client(url, combat_handler=handler)
+    neural_client = Client(url, combat_handler=handler, request_state=False)
     opponent_client = Client(
-        url, combat_handler=SimpleHeuristicsCombatHandler()
+        url, combat_handler=SimpleHeuristicsCombatHandler(), request_state=True
     )
 
     neural_client.log_manager.disable()
@@ -2477,6 +2477,8 @@ def _training_log_data(
     rollout_inference_stats: GpuInferenceStats,
     metrics,
     recovery: bool,
+    step_seconds: float,
+    overhead_seconds: float,
 ) -> dict[str, float | int]:
     wins, losses, ties, decisions = summarize_trajectories(trajectories)
     battle_count = trajectories.battle_count
@@ -2540,6 +2542,8 @@ def _training_log_data(
         "reward/speed": (
             sum(item.speed for item in reward_breakdowns) / battle_count
         ),
+        f"{prefix}/step_seconds": step_seconds,
+        f"{prefix}/overhead_seconds": overhead_seconds,
     }
 
     log_data.update(
@@ -2567,6 +2571,7 @@ async def train_member_block(
     tensorizer: BattleTensorizer,
     population_prefix: str,
 ) -> None:
+    step_start = perf_counter()
     os.environ["SHOWDOWN_USE_REQUEST_STATE"] = "1"
     device = torch.device("cuda")
     checkpoint_dir = member_checkpoint_dir(
@@ -2671,6 +2676,8 @@ async def train_member_block(
             temporary_directory = Path(temporary_directory_string)
 
             while progress.iteration < target_step:
+                step_start = perf_counter()
+
                 iteration = progress.iteration + 1
                 next_total_updates = progress.ppo_updates_total + 1
                 phase_id = training_phase_id(
@@ -2729,7 +2736,8 @@ async def train_member_block(
                     optimizer=optimizer,
                     progress=progress,
                 )
-
+                step_seconds = perf_counter() - step_start
+                overhead_seconds = step_seconds - rollout_seconds - ppo_seconds
                 log_data = _training_log_data(
                     member_index=member_index,
                     population_step=iteration,
@@ -2741,15 +2749,23 @@ async def train_member_block(
                     opponent_choices=opponent_choices,
                     metrics=metrics,
                     recovery=False,
+                    step_seconds=step_seconds,
+                    overhead_seconds=overhead_seconds,
                 )
                 if wandb_run is not None:
                     wandb_run.log(log_data)
 
+                step_seconds = perf_counter() - step_start
+                overhead_seconds = step_seconds - rollout_seconds - ppo_seconds
                 print(
                     f"model={member_index:02d} "
                     f"population_step={iteration} "
                     f"ppo_updates={progress.ppo_updates_total} "
-                    f"round_opponents={round_start}"
+                    f"round_opponents={round_start} "
+                    f"time={step_seconds:.1f}s "
+                    f"(rollout={rollout_seconds:.1f}s, "
+                    f"ppo={ppo_seconds:.1f}s, "
+                    f"overhead={overhead_seconds:.1f}s)"
                 )
 
             # Round-boundary checkpoint is the immutable opponent snapshot used
@@ -2901,6 +2917,7 @@ async def train_member_recovery_updates(
             temporary_directory = Path(temporary_directory_string)
 
             while progress.ppo_updates_total < target_ppo_updates:
+                step_start = perf_counter()
                 next_total_updates = progress.ppo_updates_total + 1
                 phase_id = training_phase_id(
                     population_step=population_step,
@@ -2958,6 +2975,9 @@ async def train_member_recovery_updates(
                     progress=progress,
                 )
 
+                step_seconds = perf_counter() - step_start
+                overhead_seconds = step_seconds - rollout_seconds - ppo_seconds
+
                 log_data = _training_log_data(
                     member_index=member_index,
                     population_step=population_step,
@@ -2969,6 +2989,8 @@ async def train_member_recovery_updates(
                     rollout_inference_stats=rollout_inference_stats,
                     metrics=metrics,
                     recovery=True,
+                    step_seconds=step_seconds,
+                    overhead_seconds=overhead_seconds,
                 )
                 if wandb_run is not None:
                     wandb_run.log(log_data)
