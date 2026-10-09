@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 import torch
+from torch import Tensor
 from torch.distributions import Categorical
 
 from ai_cif.model.model import BattleModel, TransformerBattleModel
@@ -126,7 +127,6 @@ def _rollout_old_values(
 
 
 def ppo_update(
-    *,
     model: BattleModel | TransformerBattleModel,
     optimizer: torch.optim.Optimizer,
     trajectories: list[Trajectory] | PackedRollout,
@@ -161,6 +161,15 @@ def ppo_update(
             advantages_cpu.std(unbiased=False) + 1e-8
         )
 
+    # Move the complete rollout to the training device once.
+    observations = rollout.observations.to(device)
+
+    oracle_observations = (
+        rollout.oracle_observations.to(device)
+        if rollout.oracle_observations is not None
+        else None
+    )
+
     actions = rollout.actions.to(device)
     old_log_probs = rollout.old_log_probs.to(device)
     old_values = old_values_cpu.to(device)
@@ -169,45 +178,48 @@ def ppo_update(
 
     count = rollout.decision_count
 
-    policy_losses: list[float] = []
-    value_losses: list[float] = []
-    entropies: list[float] = []
-    total_losses: list[float] = []
-    approx_kls: list[float] = []
-    clip_fractions: list[float] = []
+    policy_losses: list[Tensor] = []
+    value_losses: list[Tensor] = []
+    entropies: list[Tensor] = []
+    total_losses: list[Tensor] = []
+    approx_kls: list[Tensor] = []
+    clip_fractions: list[Tensor] = []
 
     model.train()
 
     early_stop = False
+
     for _ in range(config.epochs):
-        permutation = torch.randperm(count)
+        # Keep minibatch indices on the GPU too.
+        permutation = torch.randperm(count, device=device)
 
         for start in range(0, count, config.minibatch_size):
             indices = permutation[start : start + config.minibatch_size]
 
-            batch = rollout.observations.index_select(indices).to(device)
+            batch = observations.index_select(indices)
 
             oracle_batch = (
-                rollout.oracle_observations.index_select(indices).to(device)
-                if rollout.oracle_observations is not None
+                oracle_observations.index_select(indices)
+                if oracle_observations is not None
                 else None
             )
 
-            batch_actions = actions[indices]
-            batch_old_log_probs = old_log_probs[indices]
-            batch_returns = returns[indices]
-            batch_advantages = advantages[indices]
+            batch_actions = actions.index_select(0, indices)
+            batch_old_log_probs = old_log_probs.index_select(0, indices)
+            batch_returns = returns.index_select(0, indices)
+            batch_advantages = advantages.index_select(0, indices)
 
-            logits, values = model(batch, oracle_batch=oracle_batch)
+            logits, values = model(
+                batch,
+                oracle_batch=oracle_batch,
+            )
 
             distribution = Categorical(logits=logits)
 
             new_log_probs = distribution.log_prob(batch_actions)
-
             entropy = distribution.entropy().mean()
 
             log_ratio = new_log_probs - batch_old_log_probs
-
             ratio = torch.exp(log_ratio)
 
             approx_kl = ((ratio - 1.0) - log_ratio).mean()
@@ -215,27 +227,35 @@ def ppo_update(
 
             if (
                 config.kl_ratio_threshold is not None
-                and kl_value > config.kl_target * config.kl_ratio_threshold
+                and kl_value
+                > config.kl_target * config.kl_ratio_threshold
             ):
                 early_stop = True
                 break
 
             clip_fraction = (
-                ((ratio - 1.0).abs() > config.clip_epsilon).float().mean()
+                ((ratio - 1.0).abs() > config.clip_epsilon)
+                .float()
+                .mean()
             )
 
             unclipped = ratio * batch_advantages
 
             clipped = (
                 torch.clamp(
-                    ratio, 1.0 - config.clip_epsilon, 1.0 + config.clip_epsilon
+                    ratio,
+                    1.0 - config.clip_epsilon,
+                    1.0 + config.clip_epsilon,
                 )
                 * batch_advantages
             )
 
             policy_loss = -torch.min(unclipped, clipped).mean()
 
-            value_loss = torch.nn.functional.mse_loss(values, batch_returns)
+            value_loss = torch.nn.functional.mse_loss(
+                values,
+                batch_returns,
+            )
 
             total_loss = (
                 policy_loss
@@ -243,37 +263,49 @@ def ppo_update(
                 - config.entropy_coef * entropy
             )
 
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)
             total_loss.backward()
 
             torch.nn.utils.clip_grad_norm_(
-                model.parameters(), config.max_grad_norm
+                model.parameters(),
+                config.max_grad_norm,
             )
 
             optimizer.step()
 
-            policy_losses.append(float(policy_loss.item()))
-            value_losses.append(float(value_loss.item()))
-            entropies.append(float(entropy.item()))
-            total_losses.append(float(total_loss.item()))
-            approx_kls.append(float(approx_kl.item()))
-            clip_fractions.append(float(clip_fraction.item()))
+            policy_losses.append(policy_loss.detach())
+            value_losses.append(value_loss.detach())
+            entropies.append(entropy.detach())
+            total_losses.append(total_loss.detach())
+            approx_kls.append(approx_kl.detach())
+            clip_fractions.append(clip_fraction.detach())
         if early_stop:
             break
 
     model.eval()
 
-    value_explained_variance = explained_variance(old_values, returns)
+    value_explained_variance = explained_variance(
+        old_values,
+        returns,
+    )
+
+    mean_policy_loss = torch.stack(policy_losses).mean()
+    mean_value_loss = torch.stack(value_losses).mean()
+    mean_entropy = torch.stack(entropies).mean()
+    mean_total_loss = torch.stack(total_losses).mean()
+    mean_approx_kl = torch.stack(approx_kls).mean()
+    max_approx_kl = torch.stack(approx_kls).max()
+    mean_clip_fraction = torch.stack(clip_fractions).mean()
 
     return PPOMetrics(
-        policy_loss=sum(policy_losses) / (len(policy_losses) or 1),
-        value_loss=sum(value_losses) / (len(value_losses) or 1),
-        entropy=sum(entropies) / (len(entropies) or 1),
-        total_loss=sum(total_losses) / (len(total_losses) or 1),
-        approx_kl=sum(approx_kls) / (len(approx_kls) or 1),
-        max_approx_kl=max(approx_kls),
+        policy_loss=float(mean_policy_loss.item()),
+        value_loss=float(mean_value_loss.item()),
+        entropy=float(mean_entropy.item()),
+        total_loss=float(mean_total_loss.item()),
+        approx_kl=float(mean_approx_kl.item()),
+        max_approx_kl=float(max_approx_kl.item()),
+        clip_fraction=float(mean_clip_fraction.item()),
         early_stop=early_stop,
-        clip_fraction=sum(clip_fractions) / (len(clip_fractions) or 1),
         mean_value=float(old_values.mean().item()),
         mean_return=float(returns.mean().item()),
         explained_variance=value_explained_variance,

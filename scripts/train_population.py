@@ -40,6 +40,7 @@ from showdown_sdk.models.sdk.team_generators.team_generator import (
     BaseTeamGenerator,
 )
 
+from tqdm import tqdm
 import wandb
 from ai_cif.inference.combat_handler import AsyncNeuralCombatHandler
 from ai_cif.model.config import ModelConfig
@@ -96,15 +97,15 @@ DEFAULT_WEBSOCKET_URL = (
 
 
 REWARD_CONFIG = RewardConfig(
-    outcome_weight=0.2,
-    own_hp_weight=0.4,
-    enemy_hp_weight=0.4,
+    outcome_weight=0.4,
+    own_hp_weight=0.3,
+    enemy_hp_weight=0.3,
     speed_weight=0.0,
     speed_scale=40.0,
 )
 
 PPO_CONFIG = PPOConfig(
-    learning_rate=1e-4,
+    learning_rate=5e-5,
     clip_epsilon=0.2,
     value_coef=0.5,
     entropy_coef=0.01,
@@ -119,12 +120,12 @@ PPO_CONFIG = PPOConfig(
 
 
 TRAINING_CONFIG = TrainingConfig(
-    iterations=1000,
-    rollout_battles=500,
+    iterations=2000,
+    rollout_battles=1000,
     # Kept because TrainingConfig requires it. Population evaluation below uses
     # EVAL_BATTLES_PER_OPPONENT instead of a single total battle count.
     eval_battles=1000,
-    eval_interval=100,
+    eval_interval=50,
     team_seed=42,
 )
 
@@ -132,12 +133,13 @@ TRAINING_CONFIG = TrainingConfig(
 RUNNING_CONFIG = RunningConfig(
     url=DEFAULT_WEBSOCKET_URL,
     format="gen4randombattle",
-    workers=12,
+    workers=16,
     threads=1,
     checkpoint_dir=Path("checkpoints"),
     wandb_project="ai-cif",
     wandb_entity=None,
     battle_lanes=15,
+    eval_battle_lanes=20,
     gpu_batch_size=128,
     gpu_batch_wait_ms=2,
 )
@@ -163,7 +165,7 @@ MODEL_CONFIG = ModelConfig(
 # round freezes the population at step 10*k and trains every member from
 # 10*k -> 10*(k+1) against that frozen population. This keeps opponent strength
 # fair even though members are trained sequentially on one desktop GPU.
-POPULATION_SIZE = 2
+POPULATION_SIZE = 4
 STEPS_PER_ROUND = 10
 
 # Change this one path to your supervised-learning checkpoint.
@@ -174,9 +176,9 @@ POPULATION_INITIAL_WEIGHTS = {
 
 # Training distribution only. Evaluation has a separate fixed-style benchmark.
 TRAIN_OPPONENT_WEIGHTS = {
-    "simple_heuristics": 0.0,
-    "current": 0.5,
-    "historical": 0.5,
+    "simple_heuristics": 0.15,
+    "current": 0.425,
+    "historical": 0.425,
 }
 
 HISTORICAL_GROUP = "historical"
@@ -206,8 +208,8 @@ RECOVERY_POPULATION_MARGIN = 0.0
 RECOVERY_UPDATES_PER_BLOCK = 10
 MAX_RECOVERY_BLOCKS = 2
 
-INITIAL_STEP = 0
-LAST_STEP = 1000
+INITIAL_STEP = 1000
+LAST_STEP = 10000
 WANDB_RUN_ID_FILENAME = "wandb_run_id.txt"
 POPULATION_STATE_FILENAME = "population_state.json"
 EVAL_RESULTS_DIRNAME = "eval_results"
@@ -226,6 +228,38 @@ def historical_snapshot_iterations(current_iteration: int) -> list[int]:
         )
     )
 
+def evaluation_snapshot_iterations(current_iteration: int) -> list[int]:
+    """Sparse old history, dense coverage over the most recent 50 steps."""
+
+    if current_iteration <= INITIAL_STEP:
+        return []
+
+    recent_start = max(
+        INITIAL_STEP,
+        current_iteration - 50,
+    )
+
+    older = list(
+        range(
+            100,
+            recent_start,
+            100,
+        )
+    )
+
+    recent_first = (
+        ((recent_start + 9) // 10) * 10
+    )
+
+    recent = list(
+        range(
+            recent_first,
+            current_iteration,
+            10,
+        )
+    )
+
+    return list(dict.fromkeys((*older, *recent)))
 
 def make_historical_pool(
     *, current_iteration: int, team_seed: int
@@ -327,7 +361,7 @@ def evaluation_history_choices(
         for _ in range(EVAL_BATTLES_PER_OPPONENT)
     )
 
-    for iteration in historical_snapshot_iterations(population_step):
+    for iteration in evaluation_snapshot_iterations(population_step):
         own_ref = (active_member_index, iteration)
         model_refs.append(own_ref)
         choices.extend(
@@ -1164,7 +1198,16 @@ async def evaluate(
     by_group: dict[str, tuple[int, int, int]] = {}
     by_model: dict[str, tuple[int, int, int]] = {}
 
-    for choice in opponent_choices:
+    progress = tqdm(
+        opponent_choices,
+        desc=f"eval worker={worker_index:02d}",
+        position=worker_index,
+        leave=False,
+        dynamic_ncols=True,
+    )
+
+    for choice in progress:
+        progress.set_postfix_str(choice.model_name)
         opponent_client.combat_handler = _opponent_handler(
             choice=choice,
             tensorizer=tensorizer,
@@ -1462,7 +1505,7 @@ async def _evaluation_lane(
 
     neural_client = Client(url, combat_handler=handler, request_state=False)
     opponent_client = Client(
-        url, combat_handler=SimpleHeuristicsCombatHandler(), request_state=True
+        url, combat_handler=SimpleHeuristicsCombatHandler(), request_state=False
     )
 
     neural_client.log_manager.disable()
@@ -1504,6 +1547,27 @@ async def _evaluation_lane(
             return_exceptions=True,
         )
 
+def _evaluation_matchup_blocks(
+    opponent_choices: list[OpponentChoice],
+) -> list[list[OpponentChoice]]:
+    blocks: dict[
+        tuple[str, str | None, str],
+        list[OpponentChoice],
+    ] = {}
+
+    for choice in opponent_choices:
+        key = (
+            choice.group,
+            choice.model_key,
+            choice.model_name,
+        )
+
+        if key not in blocks:
+            blocks[key] = []
+
+        blocks[key].append(choice)
+
+    return list(blocks.values())
 
 async def _evaluation_worker_async(
     *,
@@ -1523,20 +1587,25 @@ async def _evaluation_worker_async(
     dict[str, tuple[int, int, int]],
     dict[str, tuple[int, int, int]],
 ]:
-    lane_counts = split_battles(len(opponent_choices), battle_lanes)
-
     pending: PendingInference = {}
 
     pump_task = asyncio.create_task(
         response_pump(worker_index=worker_index, pending=pending)
     )
 
-    lane_choices: list[list[OpponentChoice]] = []
-    offset = 0
+    lane_choices: list[list[OpponentChoice]] = [
+        [] for _ in range(battle_lanes)
+    ]
 
-    for count in lane_counts:
-        lane_choices.append(opponent_choices[offset : offset + count])
-        offset += count
+    for block in _evaluation_matchup_blocks(opponent_choices):
+        lane_counts = split_battles(len(block), battle_lanes)
+        offset = 0
+
+        for lane_index, count in enumerate(lane_counts):
+            lane_choices[lane_index].extend(
+                block[offset : offset + count]
+            )
+            offset += count
 
     try:
         tasks = [
@@ -1750,19 +1819,28 @@ async def evaluate_multiprocess(
     dict[str, tuple[int, int, int]],
     dict[str, tuple[int, int, int]],
 ]:
-    counts = split_battles(len(opponent_choices), worker_count)
-
     loop = asyncio.get_running_loop()
     tasks = []
 
-    offset = 0
+    worker_choices_by_index: list[list[OpponentChoice]] = [
+        [] for _ in range(worker_count)
+    ]
 
-    for worker_index, count in enumerate(counts):
-        if count <= 0:
+    for block in _evaluation_matchup_blocks(opponent_choices):
+        worker_counts = split_battles(len(block), worker_count)
+        offset = 0
+
+        for worker_index, count in enumerate(worker_counts):
+            worker_choices_by_index[worker_index].extend(
+                block[offset : offset + count]
+            )
+            offset += count
+
+    for worker_index, worker_choices in enumerate(
+        worker_choices_by_index
+    ):
+        if not worker_choices:
             continue
-
-        worker_choices = opponent_choices[offset : offset + count]
-        offset += count
 
         tasks.append(
             loop.run_in_executor(
@@ -3115,13 +3193,13 @@ async def evaluate_member_at_step(
     )
 
     context = multiprocessing.get_context("spawn")
-    active_slot_count = running_config.workers * running_config.battle_lanes
+    active_slot_count = running_config.workers * running_config.eval_battle_lanes
     slot_count = active_slot_count * 2
     request_queue = context.Queue(
         maxsize=max(slot_count * 2, running_config.gpu_batch_size * 4)
     )
     response_queues = [
-        context.Queue(maxsize=max(running_config.battle_lanes * 4, 16))
+        context.Queue(maxsize=max(running_config.eval_battle_lanes * 4, 16))
         for _ in range(running_config.workers)
     ]
     shared_buffer = SharedBattleBuffer.create(
@@ -3167,7 +3245,7 @@ async def evaluate_member_at_step(
             fmt=running_config.format,
             team_seed=training_config.team_seed,
             worker_count=running_config.workers,
-            battle_lanes=running_config.battle_lanes,
+            battle_lanes=running_config.eval_battle_lanes,
             phase_id=phase_id,
             tensorizer=tensorizer,
             opponent_choices=eval_choices,

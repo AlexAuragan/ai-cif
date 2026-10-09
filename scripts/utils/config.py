@@ -38,6 +38,7 @@ RUNNING_TYPES = {
     "wandb_project": str,
     "wandb_entity": str,
     "battle_lanes": int,
+    "eval_battle_lanes": int,
     "gpu_batch_size": int,
     "gpu_batch_wait_ms": float,
 }
